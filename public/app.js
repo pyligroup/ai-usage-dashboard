@@ -402,10 +402,72 @@ function providerCard(key, p) {
   return card;
 }
 
+// ---------- skeletons (shown before first data arrives) ----------
+function skeletonTile() {
+  return el('div', { class: 'tile skeleton-tile' }, [
+    el('div', { class: 'tile-head' }, [
+      el('span', { class: 'sk sk-badge' }),
+      el('span', { class: 'sk sk-label' }),
+    ]),
+    el('span', { class: 'sk sk-value' }),
+    el('span', { class: 'sk sk-sub' }),
+    el('div', { class: 'tile-bar' }, [el('span', { class: 'sk-bar' })]),
+    el('span', { class: 'sk sk-src' }),
+  ]);
+}
+
+function skeletonCard() {
+  const body = el('div', { class: 'card-body' }, [
+    el('span', { class: 'sk sk-line', style: 'width:40%' }),
+    el('div', { class: 'sk sk-bar-lg' }),
+    el('span', { class: 'sk sk-line', style: 'width:30%' }),
+    el('div', { class: 'sk sk-bar-lg' }),
+    el('div', { class: 'divider' }),
+    el('div', { class: 'stats' }, [0, 1, 2, 3].map(() => el('div', { class: 'stat' }, [el('span', { class: 'sk sk-line', style: 'width:55%' }), el('span', { class: 'sk sk-num' })]))),
+  ]);
+  return el('div', { class: 'card skeleton' }, [
+    el('div', { class: 'card-head' }, [
+      el('div', { class: 'sk sk-logo' }),
+      el('div', { style: 'flex:1' }, [
+        el('div', { class: 'sk sk-line', style: 'width:35%;margin-bottom:6px' }),
+        el('div', { class: 'sk sk-line', style: 'width:55%' }),
+      ]),
+    ]),
+    body,
+  ]);
+}
+
+function renderSkeletons() {
+  const grid = document.getElementById('summary-grid');
+  grid.innerHTML = '';
+  for (let i = 0; i < 4; i++) grid.append(skeletonTile());
+  const container = document.getElementById('providers');
+  container.innerHTML = '';
+  container.append(skeletonCard(), skeletonCard());
+}
+
+// ---------- refresh countdown ----------
+let nextRefreshAt = 0;
+function tickCountdown() {
+  const elc = document.getElementById('countdown');
+  if (!elc) return;
+  if (!nextRefreshAt) {
+    elc.textContent = '';
+    return;
+  }
+  const secs = Math.max(0, Math.round((nextRefreshAt - Date.now()) / 1000));
+  elc.textContent = secs <= 0 ? 'refreshing…' : `next refresh in ${secs}s`;
+}
+
 // ---------- fetch + render loop ----------
+let hasRenderedData = false;
+
 async function refresh() {
   const dot = document.getElementById('status-dot');
   const updated = document.getElementById('updated');
+  // Schedule the next tick's target up front so the countdown is accurate even
+  // while this fetch is in flight.
+  nextRefreshAt = Date.now() + REFRESH_MS;
   try {
     const res = await fetch('/api/usage', { cache: 'no-store' });
     if (!res.ok) throw new Error('HTTP ' + res.status);
@@ -418,6 +480,7 @@ async function refresh() {
     container.innerHTML = '';
     container.append(providerCard('claude', providers.claude));
     container.append(providerCard('codex', providers.codex));
+    hasRenderedData = true;
 
     const anyLive = providers.claude?.rateLimits || providers.codex?.rateLimits;
     dot.className = anyLive ? 'dot live' : 'dot';
@@ -428,10 +491,13 @@ async function refresh() {
     updated.textContent = 'Connection error';
     console.error(err);
   }
+  tickCountdown();
 }
 
+renderSkeletons();
 refresh();
 setInterval(refresh, REFRESH_MS);
+setInterval(tickCountdown, 1000);
 document.addEventListener('visibilitychange', () => {
   if (document.visibilityState === 'visible') refresh();
 });
