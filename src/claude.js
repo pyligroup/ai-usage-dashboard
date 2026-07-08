@@ -210,6 +210,11 @@ export async function getClaudeTokenUsage({ days = 30 } = {}) {
 
   const acc = { ...empty, byModel: {}, daily: {} };
   const seenSessions = new Set();
+  // Claude Code writes one JSONL line per content block (assistant text + each
+  // tool_use), and every line for a given assistant message repeats the SAME
+  // cumulative `message.usage`. Summing every line double/triple-counts tokens
+  // (~2.4x on real logs). Dedup by (session, message.id) — count each message once.
+  const seenMessages = new Set();
 
   for (const f of files) {
     const st = await safeStat(f);
@@ -223,6 +228,14 @@ export async function getClaudeTokenUsage({ days = 30 } = {}) {
       if (!usage || typeof usage !== 'object') continue;
       const model = msg.model || 'unknown';
       if (model === '<synthetic>') continue;
+
+      // Skip repeated lines for the same assistant message (see seenMessages note).
+      // Fall back to requestId, then uuid, if id is absent so we never over-skip.
+      const msgKey = `${obj?.sessionId || ''}:${msg.id || obj?.requestId || obj?.uuid || ''}`;
+      if (msg.id || obj?.requestId) {
+        if (seenMessages.has(msgKey)) continue;
+        seenMessages.add(msgKey);
+      }
 
       const input = usage.input_tokens || 0;
       const output = usage.output_tokens || 0;

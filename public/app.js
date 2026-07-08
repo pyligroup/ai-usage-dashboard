@@ -339,29 +339,40 @@ function providerCard(key, p) {
       ]),
     );
   } else {
+    // Codex's input_tokens is INCLUSIVE of cached_input_tokens, so show real
+    // (non-cached) input separately from cache reads — mirroring the Claude card,
+    // so "Input" isn't inflated by cached context.
+    const cached = t.cachedInputTokens || 0;
+    const realInput = Math.max(0, (t.inputTokens || 0) - cached);
     stats.append(
-      stat('Total tokens', fmtCompact(t.totalTokens), 'all tokens in 30d', {
-        tip: 'Sum of input + output tokens across all Codex sessions in the last 30 days.',
+      stat('Real input', fmtCompact(realInput), 'sent, excluding cache', {
+        tip: 'Input tokens minus cached input — the non-cached tokens you + tools actually sent.',
+      }),
+    );
+    stats.append(
+      stat('Output', fmtCompact(t.outputTokens), 'tokens Codex generated'),
+    );
+    stats.append(
+      stat('Cache reads', fmtCompact(cached), 'cached input re-read', {
+        tip: 'Cached input tokens re-read across turns — included in Codex’s raw input count, shown separately here.',
       }),
     );
     stats.append(
       stat('Sessions', fmtCompact(t.sessions), 'conversations in 30d'),
     );
-    stats.append(
-      stat('Input', fmtCompact(t.inputTokens), 'tokens you + tools sent'),
-    );
-    stats.append(
-      stat('Output', fmtCompact(t.outputTokens), 'tokens Codex generated'),
-    );
     body.append(stats);
   }
 
   // sparkline
+  // Claude: attributed per message timestamp → true per-day.
+  // Codex: rollout token counts are cumulative per session, so each session's
+  // total lands on its last-active day — label it honestly as by-session, not
+  // an exact per-day breakdown.
   if (t.daily && Object.keys(t.daily).length) {
     body.append(
       el('div', { class: 'section-label' }, [
-        'Daily tokens',
-        el('span', { class: 'section-src' }, 'per day, 30 days'),
+        isClaude ? 'Daily tokens' : 'Session tokens',
+        el('span', { class: 'section-src' }, isClaude ? 'per day, 30 days' : 'by session end-day, 30 days'),
       ]),
     );
     body.append(sparkline(t.daily, meta.accent));
