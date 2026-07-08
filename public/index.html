@@ -1,0 +1,55 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>AI Usage Dashboard</title>
+    <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'%3E%3Ctext y='.9em' font-size='90'%3E%F0%9F%93%8A%3C/text%3E%3C/svg%3E" />
+    <link rel="stylesheet" href="styles.css" />
+  </head>
+  <body>
+    <header class="topbar">
+      <div class="topbar-inner">
+        <h1>AI Usage</h1>
+        <div class="topbar-meta">
+          <span id="status-dot" class="dot" aria-hidden="true"></span>
+          <span id="updated" class="updated">Loading…</span>
+          <span id="countdown" class="countdown" aria-live="off"></span>
+        </div>
+      </div>
+    </header>
+
+    <main id="app">
+      <!-- Summary strip: the at-a-glance numbers, pinned at top -->
+      <section class="summary" aria-label="Usage summary">
+        <div class="summary-head">
+          <h2 class="summary-title">Rate-limit usage</h2>
+          <p class="summary-legend">
+            <span class="lg lg-claude">Claude %</span> is fetched
+            <strong>live</strong> from Anthropic ·
+            <span class="lg lg-codex">Codex %</span> is read from Codex’s
+            <strong>last on-disk snapshot</strong> (updates only when you run
+            Codex)
+          </p>
+        </div>
+        <div class="summary-grid" id="summary-grid">
+          <!-- summary tiles injected here -->
+        </div>
+      </section>
+
+      <!-- Per-provider detail cards -->
+      <section class="providers" id="providers">
+        <!-- provider cards injected here -->
+      </section>
+    </main>
+
+    <footer class="foot">
+      <span
+        >Data read locally from your Claude &amp; Codex CLIs. Live rate-limit
+        endpoints are undocumented and may occasionally be unavailable.</span
+      >
+    </footer>
+
+    <script src="app.js"></script>
+  </body>
+</html>
