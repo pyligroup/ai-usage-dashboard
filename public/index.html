@@ -21,6 +21,16 @@
     <main id="app">
       <!-- Summary strip: the at-a-glance numbers, pinned at top -->
       <section class="summary" aria-label="Usage summary">
+        <div class="summary-head">
+          <h2 class="summary-title">Rate-limit usage</h2>
+          <p class="summary-legend">
+            <span class="lg lg-claude">Claude %</span> is fetched
+            <strong>live</strong> from Anthropic ·
+            <span class="lg lg-codex">Codex %</span> is read from Codex’s
+            <strong>last on-disk snapshot</strong> (updates only when you run
+            Codex)
+          </p>
+        </div>
         <div class="summary-grid" id="summary-grid">
           <!-- summary tiles injected here -->
         </div>

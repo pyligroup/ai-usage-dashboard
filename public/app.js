@@ -42,6 +42,21 @@ function fmtReset(resetsAt) {
   return `resets in ${days}d ${remH}h`;
 }
 
+// "how long ago" for a past timestamp (ms). Returns e.g. "2m ago", "3h ago".
+function fmtAge(tsMs) {
+  if (!tsMs) return 'unknown';
+  const ms = Date.now() - tsMs;
+  if (ms < 0) return 'just now';
+  const mins = Math.round(ms / 60000);
+  if (mins < 1) return 'just now';
+  if (mins < 60) return `${mins}m ago`;
+  const hrs = Math.floor(mins / 60);
+  const rem = mins % 60;
+  if (hrs < 24) return `${hrs}h ${rem}m ago`;
+  const days = Math.floor(hrs / 24);
+  return `${days}d ${hrs % 24}h ago`;
+}
+
 function el(tag, attrs = {}, children = []) {
   const e = document.createElement(tag);
   for (const [k, v] of Object.entries(attrs)) {
@@ -58,7 +73,19 @@ function el(tag, attrs = {}, children = []) {
 }
 
 // ---------- summary strip ----------
-function summaryTile({ provider, label, pct, resetsAt, missing }) {
+// Each provider's rate-limit % has a different provenance. Say so plainly.
+function limitSourceText(provider, rateLimits) {
+  if (provider === 'claude') {
+    return rateLimits?.stale
+      ? 'live fetch (using last good value)'
+      : 'live from Anthropic just now';
+  }
+  // codex — from the on-disk snapshot Codex last wrote
+  const age = fmtAge(rateLimits?.capturedAt);
+  return `snapshot Codex saved ${age}`;
+}
+
+function summaryTile({ provider, label, pct, resetsAt, sourceText, missing }) {
   const meta = PROVIDER_META[provider];
   const color = severityColor(pct);
   const tile = el('div', { class: 'tile', style: `--accent:${meta.accent}` });
@@ -79,10 +106,12 @@ function summaryTile({ provider, label, pct, resetsAt, missing }) {
       el('span', { class: 'pct' }, '%'),
     ]),
   );
-  tile.append(el('div', { class: 'tile-sub' }, fmtReset(resetsAt) || ' '));
+  tile.append(el('div', { class: 'tile-sub' }, fmtReset(resetsAt) || ' '));
   const bar = el('div', { class: 'tile-bar' });
   bar.append(el('span', { style: `width:${Math.min(100, pct)}%;background:${color}` }));
   tile.append(bar);
+  // provenance line — small, muted, always present
+  tile.append(el('div', { class: 'tile-src' }, sourceText));
   return tile;
 }
 
@@ -92,23 +121,24 @@ function renderSummary(providers) {
   for (const key of ['claude', 'codex']) {
     const p = providers[key];
     const rl = p && p.rateLimits;
-    // 5-hour tile
+    const src = rl ? limitSourceText(key, rl) : 'no data';
     grid.append(
       summaryTile({
         provider: key,
-        label: '5-hour',
+        label: '5-hour limit',
         pct: rl?.fiveHour?.usedPercent,
         resetsAt: rl?.fiveHour?.resetsAt,
+        sourceText: src,
         missing: !rl?.fiveHour,
       }),
     );
-    // weekly tile
     grid.append(
       summaryTile({
         provider: key,
-        label: 'weekly',
+        label: 'weekly limit',
         pct: rl?.weekly?.usedPercent,
         resetsAt: rl?.weekly?.resetsAt,
+        sourceText: src,
         missing: !rl?.weekly,
       }),
     );
@@ -152,7 +182,7 @@ function sparkline(dailyMap, accent) {
 }
 
 // ---------- provider card ----------
-function limitRow(name, win) {
+function limitRow(name, win, sourceText) {
   if (!win) {
     return el('div', { class: 'limit-row' }, [
       el('div', { class: 'limit-top' }, [
@@ -173,7 +203,20 @@ function limitRow(name, win) {
     el('div', { class: 'bar' }, [
       el('span', { style: `width:${Math.min(100, pct)}%;background:${color}` }),
     ]),
-    el('div', { class: 'limit-reset' }, fmtReset(win.resetsAt) || ' '),
+    el('div', { class: 'limit-reset' }, [
+      fmtReset(win.resetsAt) || ' ',
+      sourceText ? el('span', { class: 'limit-src' }, ` · ${sourceText}`) : null,
+    ]),
+  ]);
+}
+
+// A labelled stat tile with a plain-language caption of what it represents.
+function stat(label, value, caption, opts = {}) {
+  const v = el('div', { class: 'stat-v' }, value);
+  return el('div', { class: 'stat', title: opts.tip || caption || '' }, [
+    el('div', { class: 'stat-k' }, label),
+    v,
+    caption ? el('div', { class: 'stat-cap' }, caption) : null,
   ]);
 }
 
@@ -181,13 +224,33 @@ function providerCard(key, p) {
   const meta = PROVIDER_META[key];
   const card = el('div', { class: 'card', style: `--accent:${meta.accent}` });
 
-  // header
-  const isLive = p?.source === 'live-endpoint' || p?.source === 'local-rollout';
-  const subText = key === 'claude'
+  const rl = p?.rateLimits;
+  const isClaude = key === 'claude';
+  const hasLimits = !!rl;
+
+  // Header chip is honest about provenance:
+  //  Claude -> "live" (fetched from Anthropic)
+  //  Codex  -> "snapshot Xm ago" (read from disk, only as fresh as your last Codex run)
+  let chipText, chipCls, chipTip;
+  if (!hasLimits) {
+    chipText = 'tokens only';
+    chipCls = 'chip fallback';
+    chipTip = 'Live rate-limit % unavailable — showing local token totals only.';
+  } else if (isClaude) {
+    chipText = rl.stale ? 'live (cached)' : 'live';
+    chipCls = 'chip live';
+    chipTip = 'Fetched live from Anthropic (api.anthropic.com/api/oauth/usage), refreshed every few minutes.';
+  } else {
+    chipText = `snapshot · ${fmtAge(rl.capturedAt)}`;
+    chipCls = 'chip snapshot';
+    chipTip =
+      'Read from the snapshot Codex wrote to disk on its last run. Not fetched live — it only updates when you use Codex.';
+  }
+
+  const subText = isClaude
     ? [p?.subscriptionType ? p.subscriptionType.toUpperCase() : null, meta.sub].filter(Boolean).join(' · ')
     : [p?.planType ? p.planType.toUpperCase() : null, meta.sub].filter(Boolean).join(' · ');
-  const chipText = isLive ? 'live' : 'tokens only';
-  const chipCls = isLive ? 'chip live' : 'chip fallback';
+
   card.append(
     el('div', { class: 'card-head' }, [
       el('div', { class: 'card-logo', style: `background:${meta.accent}` }, meta.logo),
@@ -195,7 +258,7 @@ function providerCard(key, p) {
         el('div', { class: 'card-title' }, meta.name),
         el('div', { class: 'card-sub' }, subText),
       ]),
-      el('span', { class: chipCls }, chipText),
+      el('span', { class: chipCls, title: chipTip }, chipText),
     ]),
   );
 
@@ -207,76 +270,111 @@ function providerCard(key, p) {
     return card;
   }
 
-  // rate limits
-  const rl = p.rateLimits;
-  body.append(limitRow('5-hour window', rl?.fiveHour));
-  body.append(limitRow('Weekly window', rl?.weekly));
-  if (rl?.opusWeekly) body.append(limitRow('Weekly (Opus)', rl.opusWeekly));
+  // ----- Rate limits (with per-provider provenance line) -----
+  body.append(el('div', { class: 'section-label' }, 'Subscription rate limits'));
+  const limitSrc = hasLimits
+    ? isClaude
+      ? rl.stale ? 'live (cached)' : 'live'
+      : `saved ${fmtAge(rl.capturedAt)}`
+    : null;
+  body.append(limitRow('5-hour window', rl?.fiveHour, limitSrc));
+  body.append(limitRow('Weekly window', rl?.weekly, limitSrc));
+  if (rl?.opusWeekly) body.append(limitRow('Weekly (Opus)', rl.opusWeekly, limitSrc));
 
-  if (!rl) {
+  if (!hasLimits) {
     const why = p.liveError === 'no-credential'
       ? 'No CLI credential found — showing local token totals only.'
       : p.liveError
         ? `Live limits unavailable (${p.liveError}) — showing local token totals.`
         : 'Live rate-limit % unavailable — showing local token totals.';
     body.append(el('div', { class: 'note' }, why));
+  } else if (!isClaude) {
+    body.append(
+      el('div', { class: 'note' }, 'These are from Codex’s last on-disk snapshot, so they only change when you actually run Codex.'),
+    );
   }
 
   body.append(el('div', { class: 'divider' }));
 
-  // token stats (last 30d)
+  // ----- Token usage (all computed locally from session logs, last 30 days) -----
+  body.append(
+    el('div', { class: 'section-label' }, [
+      'Token usage · last 30 days',
+      el('span', { class: 'section-src' }, 'counted from local logs'),
+    ]),
+  );
+
   const t = p.tokens || {};
   const stats = el('div', { class: 'stats' });
-  stats.append(
-    el('div', { class: 'stat' }, [
-      el('div', { class: 'stat-k' }, 'Tokens · 30d'),
-      el('div', { class: 'stat-v' }, fmtCompact(t.totalTokens)),
-    ]),
-  );
-  stats.append(
-    el('div', { class: 'stat' }, [
-      el('div', { class: 'stat-k' }, 'Sessions · 30d'),
-      el('div', { class: 'stat-v' }, fmtCompact(t.sessions)),
-    ]),
-  );
-  if (key === 'claude') {
+
+  if (isClaude) {
+    // The headline "total" is dominated by cache reads (same context re-read each
+    // turn). Split it so the real work isn't buried under the cache figure.
+    const realWork = (t.inputTokens || 0) + (t.outputTokens || 0);
+    const cacheReads = t.cacheReadTokens || 0;
     stats.append(
-      el('div', { class: 'stat' }, [
-        el('div', { class: 'stat-k' }, 'Output tokens'),
-        el('div', { class: 'stat-v' }, fmtCompact(t.outputTokens)),
-      ]),
+      stat('Real work', fmtCompact(realWork), 'prompts + replies (in + out)', {
+        tip: 'Actual input + output tokens — the real prompt/response volume, excluding cached context.',
+      }),
     );
     stats.append(
-      el('div', { class: 'stat' }, [
-        el('div', { class: 'stat-k' }, 'API-equiv value'),
-        el('div', { class: 'stat-v' }, [fmtMoney(t.estCostUSD), ' ', el('small', {}, 'incl.')]),
+      stat('Cache reads', fmtCompact(cacheReads), 'cached context re-read', {
+        tip: 'Cached context re-read on each turn. Large by design and cheap; it inflates the raw total but is not new work.',
+      }),
+    );
+    stats.append(
+      stat('Output', fmtCompact(t.outputTokens), 'tokens Claude generated'),
+    );
+    stats.append(
+      stat('Sessions', fmtCompact(t.sessions), 'conversations in 30d'),
+    );
+    body.append(stats);
+
+    // Cost, clearly framed as a hypothetical, on its own line.
+    body.append(
+      el('div', { class: 'cost-note', title: 'What these tokens would cost at pay-as-you-go API list prices. You are on a flat subscription — this is NOT a bill.' }, [
+        el('span', {}, 'If billed at API rates: '),
+        el('strong', {}, fmtMoney(t.estCostUSD)),
+        el('span', { class: 'cost-cap' }, ' — hypothetical; your subscription is flat-rate'),
       ]),
     );
   } else {
     stats.append(
-      el('div', { class: 'stat' }, [
-        el('div', { class: 'stat-k' }, 'Output tokens'),
-        el('div', { class: 'stat-v' }, fmtCompact(t.outputTokens)),
-      ]),
+      stat('Total tokens', fmtCompact(t.totalTokens), 'all tokens in 30d', {
+        tip: 'Sum of input + output tokens across all Codex sessions in the last 30 days.',
+      }),
     );
     stats.append(
-      el('div', { class: 'stat' }, [
-        el('div', { class: 'stat-k' }, 'Input tokens'),
-        el('div', { class: 'stat-v' }, fmtCompact(t.inputTokens)),
-      ]),
+      stat('Sessions', fmtCompact(t.sessions), 'conversations in 30d'),
     );
+    stats.append(
+      stat('Input', fmtCompact(t.inputTokens), 'tokens you + tools sent'),
+    );
+    stats.append(
+      stat('Output', fmtCompact(t.outputTokens), 'tokens Codex generated'),
+    );
+    body.append(stats);
   }
-  body.append(stats);
 
   // sparkline
   if (t.daily && Object.keys(t.daily).length) {
-    body.append(el('div', { class: 'section-label' }, 'Daily tokens · 30 days'));
+    body.append(
+      el('div', { class: 'section-label' }, [
+        'Daily tokens',
+        el('span', { class: 'section-src' }, 'per day, 30 days'),
+      ]),
+    );
     body.append(sparkline(t.daily, meta.accent));
   }
 
-  // per-model breakdown (Claude only — Codex logs don't split by model here)
-  if (key === 'claude' && t.byModel && Object.keys(t.byModel).length) {
-    body.append(el('div', { class: 'section-label' }, 'By model'));
+  // per-model breakdown (Claude only — Codex logs don't split tokens by model)
+  if (isClaude && t.byModel && Object.keys(t.byModel).length) {
+    body.append(
+      el('div', { class: 'section-label' }, [
+        'By model',
+        el('span', { class: 'section-src' }, 'share of tokens (incl. cache)'),
+      ]),
+    );
     const models = el('div', { class: 'models' });
     const entries = Object.entries(t.byModel)
       .map(([m, v]) => [m, (v.inputTokens || 0) + (v.outputTokens || 0) + (v.cacheReadTokens || 0) + (v.cacheCreationTokens || 0)])
@@ -294,6 +392,10 @@ function providerCard(key, p) {
       );
     }
     body.append(models);
+  } else if (!isClaude) {
+    body.append(
+      el('div', { class: 'note' }, 'Per-model breakdown isn’t shown for Codex — its logs don’t split tokens by model.'),
+    );
   }
 
   card.append(body);
@@ -317,8 +419,7 @@ async function refresh() {
     container.append(providerCard('claude', providers.claude));
     container.append(providerCard('codex', providers.codex));
 
-    const anyLive =
-      providers.claude?.rateLimits || providers.codex?.rateLimits;
+    const anyLive = providers.claude?.rateLimits || providers.codex?.rateLimits;
     dot.className = anyLive ? 'dot live' : 'dot';
     updated.textContent =
       'Updated ' + new Date(data.generatedAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
@@ -331,8 +432,6 @@ async function refresh() {
 
 refresh();
 setInterval(refresh, REFRESH_MS);
-// Refresh reset countdowns every 30s implicitly via full refresh; also re-render
-// on tab focus for immediate freshness.
 document.addEventListener('visibilitychange', () => {
   if (document.visibilityState === 'visible') refresh();
 });
