@@ -1,0 +1,6 @@
+node_modules/
+*.log
+.DS_Store
+
+# local prompt-staging (dvx-prompt-output)
+.prompts/
