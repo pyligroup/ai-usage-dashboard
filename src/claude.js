@@ -210,11 +210,15 @@ export async function getClaudeTokenUsage({ days = 30 } = {}) {
 
   const acc = { ...empty, byModel: {}, daily: {} };
   const seenSessions = new Set();
+
   // Claude Code writes one JSONL line per content block (assistant text + each
-  // tool_use), and every line for a given assistant message repeats the SAME
-  // cumulative `message.usage`. Summing every line double/triple-counts tokens
-  // (~2.4x on real logs). Dedup by (session, message.id) — count each message once.
-  const seenMessages = new Set();
+  // tool_use). Every line for a given assistant message repeats that message's
+  // usage, but the value GROWS across the message's lines — early lines carry a
+  // partial output_tokens and only the LAST line has the final total. So we must
+  // collapse each (session, message) group to a SINGLE record holding its final
+  // (max) usage: summing all lines over-counts ~2.4x; keeping the first line
+  // under-counts ~12%. We collect the max usage per message here, then aggregate.
+  const byMessage = new Map(); // key -> { input, output, cacheRead, cacheCreate, model, day }
 
   for (const f of files) {
     const st = await safeStat(f);
@@ -229,53 +233,59 @@ export async function getClaudeTokenUsage({ days = 30 } = {}) {
       const model = msg.model || 'unknown';
       if (model === '<synthetic>') continue;
 
-      // Skip repeated lines for the same assistant message (see seenMessages note).
-      // Fall back to requestId, then uuid, if id is absent so we never over-skip.
-      const msgKey = `${obj?.sessionId || ''}:${msg.id || obj?.requestId || obj?.uuid || ''}`;
-      if (msg.id || obj?.requestId) {
-        if (seenMessages.has(msgKey)) continue;
-        seenMessages.add(msgKey);
-      }
-
       const input = usage.input_tokens || 0;
       const output = usage.output_tokens || 0;
       const cacheRead = usage.cache_read_input_tokens || 0;
       const cacheCreate = usage.cache_creation_input_tokens || 0;
-
-      acc.inputTokens += input;
-      acc.outputTokens += output;
-      acc.cacheReadTokens += cacheRead;
-      acc.cacheCreationTokens += cacheCreate;
-
-      const p = priceFor(model);
-      const cost =
-        (input / 1e6) * p.input +
-        (output / 1e6) * p.output +
-        (cacheCreate / 1e6) * p.cacheWrite +
-        (cacheRead / 1e6) * p.cacheRead;
-      acc.estCostUSD += cost;
-
-      const bm = (acc.byModel[model] ||= {
-        inputTokens: 0,
-        outputTokens: 0,
-        cacheReadTokens: 0,
-        cacheCreationTokens: 0,
-        estCostUSD: 0,
-      });
-      bm.inputTokens += input;
-      bm.outputTokens += output;
-      bm.cacheReadTokens += cacheRead;
-      bm.cacheCreationTokens += cacheCreate;
-      bm.estCostUSD += cost;
-
-      if (obj?.sessionId) seenSessions.add(obj.sessionId);
-
       const day = new Date(ts || st.mtimeMs).toISOString().slice(0, 10);
-      const d = (acc.daily[day] ||= { totalTokens: 0, estCostUSD: 0 });
-      const lineTotal = input + output + cacheRead + cacheCreate;
-      d.totalTokens += lineTotal;
-      d.estCostUSD += cost;
+
+      // Key by (session, message id) so each streamed message collapses to one
+      // record. Fall back to requestId/uuid so a line missing `id` still keys
+      // uniquely (worst case it counts as its own message — never over-counts).
+      const id = msg.id || obj?.requestId || obj?.uuid || `${f}:${obj?.uuid || Math.random()}`;
+      const key = `${obj?.sessionId || ''}:${id}`;
+
+      const prev = byMessage.get(key);
+      // Keep the line with the largest total usage — that's the final one.
+      const total = input + output + cacheRead + cacheCreate;
+      if (!prev || total > prev.total) {
+        byMessage.set(key, { input, output, cacheRead, cacheCreate, total, model, day });
+      }
+      if (obj?.sessionId) seenSessions.add(obj.sessionId);
     }
+  }
+
+  // Aggregate one record per message.
+  for (const m of byMessage.values()) {
+    acc.inputTokens += m.input;
+    acc.outputTokens += m.output;
+    acc.cacheReadTokens += m.cacheRead;
+    acc.cacheCreationTokens += m.cacheCreate;
+
+    const p = priceFor(m.model);
+    const cost =
+      (m.input / 1e6) * p.input +
+      (m.output / 1e6) * p.output +
+      (m.cacheCreate / 1e6) * p.cacheWrite +
+      (m.cacheRead / 1e6) * p.cacheRead;
+    acc.estCostUSD += cost;
+
+    const bm = (acc.byModel[m.model] ||= {
+      inputTokens: 0,
+      outputTokens: 0,
+      cacheReadTokens: 0,
+      cacheCreationTokens: 0,
+      estCostUSD: 0,
+    });
+    bm.inputTokens += m.input;
+    bm.outputTokens += m.output;
+    bm.cacheReadTokens += m.cacheRead;
+    bm.cacheCreationTokens += m.cacheCreate;
+    bm.estCostUSD += cost;
+
+    const d = (acc.daily[m.day] ||= { totalTokens: 0, estCostUSD: 0 });
+    d.totalTokens += m.total;
+    d.estCostUSD += cost;
   }
 
   acc.totalTokens =
