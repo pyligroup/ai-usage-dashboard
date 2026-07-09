@@ -1,9 +1,10 @@
-# CLAUDE.md
+# AGENTS.md
 
-Guidance for Claude Code (and other AI agents) working in this repository.
+Guidance for AI agents working in this repository. Keep this file accurate when
+architecture or data sources change — future agents should not have to re-derive
+undocumented provider schemas from scratch.
 
-> Prefer **`AGENTS.md`** as the canonical agent guide (same content, kept in sync).
-> Update both when architecture or data sources change.
+Companion to `CLAUDE.md` (same substance; keep them in sync when you change either).
 
 ## What this is
 
@@ -31,7 +32,7 @@ npm run dev        # node --watch server.js (restarts on change)
 There is **no test suite, no linter, and no typecheck** configured. "Verify" here
 means: start the server and confirm `GET /api/usage` returns providers with
 `available: true` (when those tools are signed in locally), and that the dashboard
-renders (see "Verifying changes" below). Do not claim tests pass — there are none.
+renders. Do not claim tests pass — there are none.
 
 ## Architecture
 
@@ -147,15 +148,14 @@ New code must uphold this.
 
 ## Product principles (why the UI is the way it is)
 
-- **Every number states what it represents and where it came from.** The user
-  explicitly asked for this. Don't add a stat without a caption/label and a clear
-  provenance (live vs local snapshot vs computed estimate).
-- **Honesty over polish.** Codex "live" was a real bug we fixed — it was a disk
-  snapshot mislabeled as live. Cursor plan % must not be labeled as a 5-hour
-  window. Don't reintroduce that class of mistake.
+- **Every number states what it represents and where it came from.** Don't add a
+  stat without a caption/label and clear provenance (live vs local snapshot vs
+  computed estimate).
+- **Honesty over polish.** Codex "live" was a real bug (disk snapshot mislabeled
+  as live). Cursor plan % must not be labeled as a 5-hour window. Don't reintroduce
+  that class of mistake.
 - **Token "totals" are often cache-dominated** (Claude + Cursor). Split
-  "Real work" (input+output) from "Cache reads". Keep them distinct; a blended
-  total misleads.
+  "Real work" (input+output) from "Cache reads". Keep them distinct.
 - **Responsive + theme-aware.** Full dashboard on wide screens, single-column on
   mobile; dark/light follow the OS. Verify both when touching layout.
 
@@ -163,14 +163,15 @@ New code must uphold this.
 
 There is no CI to lean on. Before saying a change works:
 
-1. `npm start`, then `curl -s localhost:4317/api/usage | ...` — confirm expected
-   providers return `available: true` and sane numbers.
-2. Load the page (or a preview) and confirm it renders in **both** desktop and
-   mobile widths, and doesn't overflow horizontally. Toggle Settings checkboxes
-   and confirm the cookie updates and cards hide/show.
+1. `npm start`, then `curl -s localhost:4317/api/usage` — confirm expected
+   providers return `available: true` and sane numbers (Claude/Codex/Cursor as
+   applicable on this machine).
+2. Load the page and confirm it renders in **both** desktop and mobile widths,
+   and doesn't overflow horizontally. Toggle Settings checkboxes and confirm the
+   cookie updates and cards hide/show.
 3. If you touched data logic, independently recompute the affected number from the
    raw files / API response (a throwaway Python/node script) and confirm it matches
-   what the dashboard shows. We caught a labeling issue this way; do the same.
+   what the dashboard shows.
 4. Check the browser console for errors.
 
 ## Conventions

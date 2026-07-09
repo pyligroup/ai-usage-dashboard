@@ -1,10 +1,64 @@
 'use strict';
 
 const REFRESH_MS = 30 * 1000;
+const ALL_PROVIDERS = ['claude', 'codex', 'cursor'];
+const SETTINGS_COOKIE = 'ai_usage_tools';
+const SETTINGS_MAX_AGE_SEC = 60 * 60 * 24 * 365; // 1 year
+
 const PROVIDER_META = {
   claude: { name: 'Claude', logo: 'C', accent: 'var(--claude)', sub: 'Anthropic · Claude Code' },
   codex: { name: 'Codex', logo: 'Cx', accent: 'var(--codex)', sub: 'OpenAI · Codex CLI' },
+  cursor: { name: 'Cursor', logo: 'Cu', accent: 'var(--cursor)', sub: 'Anysphere · Cursor IDE' },
 };
+
+// ---------- cookie-backed tool visibility ----------
+function readCookie(name) {
+  const prefix = name + '=';
+  for (const part of document.cookie.split(';')) {
+    const s = part.trim();
+    if (s.startsWith(prefix)) return decodeURIComponent(s.slice(prefix.length));
+  }
+  return null;
+}
+
+function writeCookie(name, value, maxAgeSec) {
+  document.cookie =
+    `${name}=${encodeURIComponent(value)}; path=/; max-age=${maxAgeSec}; SameSite=Lax`;
+}
+
+function defaultVisible() {
+  return { claude: true, codex: true, cursor: true };
+}
+
+function loadVisibleTools() {
+  const raw = readCookie(SETTINGS_COOKIE);
+  if (!raw) return defaultVisible();
+  try {
+    const parsed = JSON.parse(raw);
+    const out = defaultVisible();
+    let any = false;
+    for (const key of ALL_PROVIDERS) {
+      if (typeof parsed[key] === 'boolean') {
+        out[key] = parsed[key];
+        if (parsed[key]) any = true;
+      }
+    }
+    // Never leave the dashboard empty — fall back to all-on.
+    return any ? out : defaultVisible();
+  } catch {
+    return defaultVisible();
+  }
+}
+
+function saveVisibleTools(vis) {
+  writeCookie(SETTINGS_COOKIE, JSON.stringify(vis), SETTINGS_MAX_AGE_SEC);
+}
+
+let visibleTools = loadVisibleTools();
+
+function visibleKeys() {
+  return ALL_PROVIDERS.filter((k) => visibleTools[k]);
+}
 
 // ---------- helpers ----------
 function fmtCompact(n) {
@@ -80,12 +134,17 @@ function limitSourceText(provider, rateLimits) {
       ? 'live fetch (using last good value)'
       : 'live from Anthropic just now';
   }
+  if (provider === 'cursor') {
+    return rateLimits?.stale
+      ? 'live fetch (using last good value)'
+      : 'live from Cursor just now';
+  }
   // codex — from the on-disk snapshot Codex last wrote
   const age = fmtAge(rateLimits?.capturedAt);
   return `snapshot Codex saved ${age}`;
 }
 
-function summaryTile({ provider, label, pct, resetsAt, sourceText, missing }) {
+function summaryTile({ provider, label, pct, resetsAt, sourceText, missing, valueHint }) {
   const meta = PROVIDER_META[provider];
   const color = severityColor(pct);
   const tile = el('div', { class: 'tile', style: `--accent:${meta.accent}` });
@@ -106,7 +165,7 @@ function summaryTile({ provider, label, pct, resetsAt, sourceText, missing }) {
       el('span', { class: 'pct' }, '%'),
     ]),
   );
-  tile.append(el('div', { class: 'tile-sub' }, fmtReset(resetsAt) || ' '));
+  tile.append(el('div', { class: 'tile-sub' }, valueHint || fmtReset(resetsAt) || ' '));
   const bar = el('div', { class: 'tile-bar' });
   bar.append(el('span', { style: `width:${Math.min(100, pct)}%;background:${color}` }));
   tile.append(bar);
@@ -115,33 +174,92 @@ function summaryTile({ provider, label, pct, resetsAt, sourceText, missing }) {
   return tile;
 }
 
+function renderSummaryLegend(keys) {
+  const legend = document.getElementById('summary-legend');
+  if (!legend) return;
+  const parts = [];
+  if (keys.includes('claude')) {
+    parts.push(
+      '<span class="lg lg-claude">Claude %</span> is fetched <strong>live</strong> from Anthropic',
+    );
+  }
+  if (keys.includes('codex')) {
+    parts.push(
+      '<span class="lg lg-codex">Codex %</span> is read from Codex’s <strong>last on-disk snapshot</strong> (updates only when you run Codex)',
+    );
+  }
+  if (keys.includes('cursor')) {
+    parts.push(
+      '<span class="lg lg-cursor">Cursor %</span> is fetched <strong>live</strong> from Cursor (billing-cycle plan, not a 5-hour window)',
+    );
+  }
+  legend.innerHTML = parts.length ? parts.join(' · ') : 'No tools selected — open Settings to choose.';
+}
+
+function appendProviderSummaryTiles(grid, key, p) {
+  const rl = p && p.rateLimits;
+  const src = rl ? limitSourceText(key, rl) : 'no data';
+
+  if (key === 'cursor') {
+    // Cursor meters a billing-cycle plan allowance — never label these as 5-hour/weekly.
+    const plan = rl?.plan;
+    let hint = fmtReset(plan?.resetsAt) || '';
+    if (plan?.used != null && plan?.limit != null) {
+      hint = `${Math.round(plan.used)} / ${Math.round(plan.limit)} included` + (hint ? ` · ${hint}` : '');
+    }
+    grid.append(
+      summaryTile({
+        provider: key,
+        label: 'plan (billing cycle)',
+        pct: plan?.usedPercent,
+        resetsAt: plan?.resetsAt,
+        sourceText: src,
+        missing: !plan,
+        valueHint: hint || undefined,
+      }),
+    );
+    grid.append(
+      summaryTile({
+        provider: key,
+        label: 'auto models',
+        pct: rl?.auto?.usedPercent,
+        resetsAt: rl?.auto?.resetsAt,
+        sourceText: src,
+        missing: !rl?.auto,
+      }),
+    );
+    return;
+  }
+
+  grid.append(
+    summaryTile({
+      provider: key,
+      label: '5-hour limit',
+      pct: rl?.fiveHour?.usedPercent,
+      resetsAt: rl?.fiveHour?.resetsAt,
+      sourceText: src,
+      missing: !rl?.fiveHour,
+    }),
+  );
+  grid.append(
+    summaryTile({
+      provider: key,
+      label: 'weekly limit',
+      pct: rl?.weekly?.usedPercent,
+      resetsAt: rl?.weekly?.resetsAt,
+      sourceText: src,
+      missing: !rl?.weekly,
+    }),
+  );
+}
+
 function renderSummary(providers) {
   const grid = document.getElementById('summary-grid');
   grid.innerHTML = '';
-  for (const key of ['claude', 'codex']) {
-    const p = providers[key];
-    const rl = p && p.rateLimits;
-    const src = rl ? limitSourceText(key, rl) : 'no data';
-    grid.append(
-      summaryTile({
-        provider: key,
-        label: '5-hour limit',
-        pct: rl?.fiveHour?.usedPercent,
-        resetsAt: rl?.fiveHour?.resetsAt,
-        sourceText: src,
-        missing: !rl?.fiveHour,
-      }),
-    );
-    grid.append(
-      summaryTile({
-        provider: key,
-        label: 'weekly limit',
-        pct: rl?.weekly?.usedPercent,
-        resetsAt: rl?.weekly?.resetsAt,
-        sourceText: src,
-        missing: !rl?.weekly,
-      }),
-    );
+  const keys = visibleKeys();
+  renderSummaryLegend(keys);
+  for (const key of keys) {
+    appendProviderSummaryTiles(grid, key, providers[key]);
   }
 }
 
@@ -226,20 +344,27 @@ function providerCard(key, p) {
 
   const rl = p?.rateLimits;
   const isClaude = key === 'claude';
+  const isCursor = key === 'cursor';
+  const isCodex = key === 'codex';
   const hasLimits = !!rl;
 
   // Header chip is honest about provenance:
-  //  Claude -> "live" (fetched from Anthropic)
-  //  Codex  -> "snapshot Xm ago" (read from disk, only as fresh as your last Codex run)
+  //  Claude/Cursor -> "live"
+  //  Codex         -> "snapshot Xm ago"
   let chipText, chipCls, chipTip;
   if (!hasLimits) {
     chipText = 'tokens only';
     chipCls = 'chip fallback';
-    chipTip = 'Live rate-limit % unavailable — showing local token totals only.';
+    chipTip = 'Live rate-limit % unavailable — showing local/token totals only.';
   } else if (isClaude) {
     chipText = rl.stale ? 'live (cached)' : 'live';
     chipCls = 'chip live';
     chipTip = 'Fetched live from Anthropic (api.anthropic.com/api/oauth/usage), refreshed every few minutes.';
+  } else if (isCursor) {
+    chipText = rl.stale ? 'live (cached)' : 'live';
+    chipCls = 'chip live';
+    chipTip =
+      'Fetched live from Cursor (cursor.com/api/usage-summary). Plan % is billing-cycle included usage, not a 5-hour window.';
   } else {
     chipText = `snapshot · ${fmtAge(rl.capturedAt)}`;
     chipCls = 'chip snapshot';
@@ -247,9 +372,14 @@ function providerCard(key, p) {
       'Read from the snapshot Codex wrote to disk on its last run. Not fetched live — it only updates when you use Codex.';
   }
 
-  const subText = isClaude
-    ? [p?.subscriptionType ? p.subscriptionType.toUpperCase() : null, meta.sub].filter(Boolean).join(' · ')
-    : [p?.planType ? p.planType.toUpperCase() : null, meta.sub].filter(Boolean).join(' · ');
+  let subText;
+  if (isClaude) {
+    subText = [p?.subscriptionType ? p.subscriptionType.toUpperCase() : null, meta.sub].filter(Boolean).join(' · ');
+  } else if (isCursor) {
+    subText = [p?.membershipType ? p.membershipType.toUpperCase() : null, meta.sub].filter(Boolean).join(' · ');
+  } else {
+    subText = [p?.planType ? p.planType.toUpperCase() : null, meta.sub].filter(Boolean).join(' · ');
+  }
 
   card.append(
     el('div', { class: 'card-head' }, [
@@ -271,45 +401,82 @@ function providerCard(key, p) {
   }
 
   // ----- Rate limits (with per-provider provenance line) -----
-  body.append(el('div', { class: 'section-label' }, 'Subscription rate limits'));
-  const limitSrc = hasLimits
-    ? isClaude
-      ? rl.stale ? 'live (cached)' : 'live'
-      : `saved ${fmtAge(rl.capturedAt)}`
-    : null;
-  body.append(limitRow('5-hour window', rl?.fiveHour, limitSrc));
-  body.append(limitRow('Weekly window', rl?.weekly, limitSrc));
-  if (rl?.opusWeekly) body.append(limitRow('Weekly (Opus)', rl.opusWeekly, limitSrc));
+  body.append(
+    el('div', { class: 'section-label' }, isCursor ? 'Subscription plan usage' : 'Subscription rate limits'),
+  );
 
-  if (!hasLimits) {
-    const why = p.liveError === 'no-credential'
-      ? 'No CLI credential found — showing local token totals only.'
-      : p.liveError
-        ? `Live limits unavailable (${p.liveError}) — showing local token totals.`
-        : 'Live rate-limit % unavailable — showing local token totals.';
-    body.append(el('div', { class: 'note' }, why));
-  } else if (!isClaude) {
-    body.append(
-      el('div', { class: 'note' }, 'These are from Codex’s last on-disk snapshot, so they only change when you actually run Codex.'),
-    );
+  if (isCursor) {
+    const limitSrc = hasLimits ? (rl.stale ? 'live (cached)' : 'live') : null;
+    const plan = rl?.plan;
+    body.append(limitRow('Plan (billing cycle)', plan, limitSrc));
+    body.append(limitRow('Auto models', rl?.auto, limitSrc));
+    body.append(limitRow('API / named models', rl?.api, limitSrc));
+    if (plan?.used != null && plan?.limit != null) {
+      body.append(
+        el(
+          'div',
+          { class: 'note' },
+          `Included usage: ${Math.round(plan.used)} / ${Math.round(plan.limit)}` +
+            (plan.remaining != null ? ` · ${Math.round(plan.remaining)} remaining` : '') +
+            '. Cursor meters a billing-cycle allowance — not a 5-hour or weekly window.',
+        ),
+      );
+    } else if (!hasLimits) {
+      const why =
+        p.liveError === 'no-credential'
+          ? 'No Cursor session found — sign in to the Cursor app, then refresh.'
+          : p.liveError
+            ? `Live limits unavailable (${p.liveError}).`
+            : 'Live plan % unavailable.';
+      body.append(el('div', { class: 'note' }, why));
+    }
+  } else {
+    const limitSrc = hasLimits
+      ? isClaude
+        ? rl.stale
+          ? 'live (cached)'
+          : 'live'
+        : `saved ${fmtAge(rl.capturedAt)}`
+      : null;
+    body.append(limitRow('5-hour window', rl?.fiveHour, limitSrc));
+    body.append(limitRow('Weekly window', rl?.weekly, limitSrc));
+    if (rl?.opusWeekly) body.append(limitRow('Weekly (Opus)', rl.opusWeekly, limitSrc));
+
+    if (!hasLimits) {
+      const why =
+        p.liveError === 'no-credential'
+          ? 'No CLI credential found — showing local token totals only.'
+          : p.liveError
+            ? `Live limits unavailable (${p.liveError}) — showing local token totals.`
+            : 'Live rate-limit % unavailable — showing local token totals.';
+      body.append(el('div', { class: 'note' }, why));
+    } else if (isCodex) {
+      body.append(
+        el(
+          'div',
+          { class: 'note' },
+          'These are from Codex’s last on-disk snapshot, so they only change when you actually run Codex.',
+        ),
+      );
+    }
   }
 
   body.append(el('div', { class: 'divider' }));
 
-  // ----- Token usage (all computed locally from session logs, last 30 days) -----
+  // ----- Token usage -----
+  const tokenSrcLabel = isCursor ? 'from Cursor dashboard API' : 'counted from local logs';
   body.append(
     el('div', { class: 'section-label' }, [
-      'Token usage · last 30 days',
-      el('span', { class: 'section-src' }, 'counted from local logs'),
+      isCursor ? 'Token usage · current period' : 'Token usage · last 30 days',
+      el('span', { class: 'section-src' }, tokenSrcLabel),
     ]),
   );
 
   const t = p.tokens || {};
   const stats = el('div', { class: 'stats' });
 
-  if (isClaude) {
-    // The headline "total" is dominated by cache reads (same context re-read each
-    // turn). Split it so the real work isn't buried under the cache figure.
+  if (isClaude || isCursor) {
+    // Cache reads dominate both Claude and Cursor totals — keep them distinct.
     const realWork = (t.inputTokens || 0) + (t.outputTokens || 0);
     const cacheReads = t.cacheReadTokens || 0;
     stats.append(
@@ -319,29 +486,40 @@ function providerCard(key, p) {
     );
     stats.append(
       stat('Cache reads', fmtCompact(cacheReads), 'cached context re-read', {
-        tip: 'Cached context re-read on each turn. Large by design and cheap; it inflates the raw total but is not new work.',
+        tip: 'Cached context re-read on each turn. Large by design; it inflates the raw total but is not new work.',
       }),
     );
-    stats.append(
-      stat('Output', fmtCompact(t.outputTokens), 'tokens Claude generated'),
-    );
-    stats.append(
-      stat('Sessions', fmtCompact(t.sessions), 'conversations in 30d'),
-    );
+    stats.append(stat('Output', fmtCompact(t.outputTokens), 'tokens generated'));
+    if (isClaude) {
+      stats.append(stat('Sessions', fmtCompact(t.sessions), 'conversations in 30d'));
+    } else {
+      stats.append(
+        stat('Est. cost', fmtMoney(t.estCostUSD), 'from Cursor totals', {
+          tip: 'Sum of totalCents from Cursor’s aggregated usage events for this period — not a separate bill estimate.',
+        }),
+      );
+    }
     body.append(stats);
 
-    // Cost, clearly framed as a hypothetical, on its own line.
-    body.append(
-      el('div', { class: 'cost-note', title: 'What these tokens would cost at pay-as-you-go API list prices. You are on a flat subscription — this is NOT a bill.' }, [
-        el('span', {}, 'If billed at API rates: '),
-        el('strong', {}, fmtMoney(t.estCostUSD)),
-        el('span', { class: 'cost-cap' }, ' — hypothetical; your subscription is flat-rate'),
-      ]),
-    );
+    if (isClaude) {
+      body.append(
+        el(
+          'div',
+          {
+            class: 'cost-note',
+            title:
+              'What these tokens would cost at pay-as-you-go API list prices. You are on a flat subscription — this is NOT a bill.',
+          },
+          [
+            el('span', {}, 'If billed at API rates: '),
+            el('strong', {}, fmtMoney(t.estCostUSD)),
+            el('span', { class: 'cost-cap' }, ' — hypothetical; your subscription is flat-rate'),
+          ],
+        ),
+      );
+    }
   } else {
-    // Codex's input_tokens is INCLUSIVE of cached_input_tokens, so show real
-    // (non-cached) input separately from cache reads — mirroring the Claude card,
-    // so "Input" isn't inflated by cached context.
+    // Codex's input_tokens is INCLUSIVE of cached_input_tokens.
     const cached = t.cachedInputTokens || 0;
     const realInput = Math.max(0, (t.inputTokens || 0) - cached);
     stats.append(
@@ -349,25 +527,17 @@ function providerCard(key, p) {
         tip: 'Input tokens minus cached input — the non-cached tokens you + tools actually sent.',
       }),
     );
-    stats.append(
-      stat('Output', fmtCompact(t.outputTokens), 'tokens Codex generated'),
-    );
+    stats.append(stat('Output', fmtCompact(t.outputTokens), 'tokens Codex generated'));
     stats.append(
       stat('Cache reads', fmtCompact(cached), 'cached input re-read', {
         tip: 'Cached input tokens re-read across turns — included in Codex’s raw input count, shown separately here.',
       }),
     );
-    stats.append(
-      stat('Sessions', fmtCompact(t.sessions), 'conversations in 30d'),
-    );
+    stats.append(stat('Sessions', fmtCompact(t.sessions), 'conversations in 30d'));
     body.append(stats);
   }
 
-  // sparkline
-  // Claude: attributed per message timestamp → true per-day.
-  // Codex: rollout token counts are cumulative per session, so each session's
-  // total lands on its last-active day — label it honestly as by-session, not
-  // an exact per-day breakdown.
+  // sparkline (Claude/Codex local daily maps; Cursor aggregated endpoint has no per-day)
   if (t.daily && Object.keys(t.daily).length) {
     body.append(
       el('div', { class: 'section-label' }, [
@@ -376,10 +546,14 @@ function providerCard(key, p) {
       ]),
     );
     body.append(sparkline(t.daily, meta.accent));
+  } else if (isCursor) {
+    body.append(
+      el('div', { class: 'note' }, 'Per-day sparkline isn’t shown for Cursor — the aggregated endpoint returns totals by model, not by day.'),
+    );
   }
 
-  // per-model breakdown (Claude only — Codex logs don't split tokens by model)
-  if (isClaude && t.byModel && Object.keys(t.byModel).length) {
+  // per-model breakdown (Claude + Cursor)
+  if ((isClaude || isCursor) && t.byModel && Object.keys(t.byModel).length) {
     body.append(
       el('div', { class: 'section-label' }, [
         'By model',
@@ -388,7 +562,14 @@ function providerCard(key, p) {
     );
     const models = el('div', { class: 'models' });
     const entries = Object.entries(t.byModel)
-      .map(([m, v]) => [m, (v.inputTokens || 0) + (v.outputTokens || 0) + (v.cacheReadTokens || 0) + (v.cacheCreationTokens || 0)])
+      .map(([m, v]) => [
+        m,
+        (v.inputTokens || 0) +
+          (v.outputTokens || 0) +
+          (v.cacheReadTokens || 0) +
+          (v.cacheCreationTokens || 0) +
+          (v.cacheWriteTokens || 0),
+      ])
       .sort((a, b) => b[1] - a[1])
       .slice(0, 5);
     const max = Math.max(1, ...entries.map((e) => e[1]));
@@ -403,7 +584,7 @@ function providerCard(key, p) {
       );
     }
     body.append(models);
-  } else if (!isClaude) {
+  } else if (isCodex) {
     body.append(
       el('div', { class: 'note' }, 'Per-model breakdown isn’t shown for Codex — its logs don’t split tokens by model.'),
     );
@@ -434,7 +615,14 @@ function skeletonCard() {
     el('span', { class: 'sk sk-line', style: 'width:30%' }),
     el('div', { class: 'sk sk-bar-lg' }),
     el('div', { class: 'divider' }),
-    el('div', { class: 'stats' }, [0, 1, 2, 3].map(() => el('div', { class: 'stat' }, [el('span', { class: 'sk sk-line', style: 'width:55%' }), el('span', { class: 'sk sk-num' })]))),
+    el('div', { class: 'stats' }, [
+      0, 1, 2, 3,
+    ].map(() =>
+      el('div', { class: 'stat' }, [
+        el('span', { class: 'sk sk-line', style: 'width:55%' }),
+        el('span', { class: 'sk sk-num' }),
+      ]),
+    )),
   ]);
   return el('div', { class: 'card skeleton' }, [
     el('div', { class: 'card-head' }, [
@@ -451,10 +639,78 @@ function skeletonCard() {
 function renderSkeletons() {
   const grid = document.getElementById('summary-grid');
   grid.innerHTML = '';
-  for (let i = 0; i < 4; i++) grid.append(skeletonTile());
+  const n = Math.max(2, visibleKeys().length * 2);
+  for (let i = 0; i < n; i++) grid.append(skeletonTile());
   const container = document.getElementById('providers');
   container.innerHTML = '';
-  container.append(skeletonCard(), skeletonCard());
+  for (const _ of visibleKeys()) container.append(skeletonCard());
+}
+
+// ---------- settings modal ----------
+let lastProviders = null;
+
+function openSettings() {
+  const modal = document.getElementById('settings-modal');
+  const form = document.getElementById('settings-form');
+  const hint = document.getElementById('settings-hint');
+  if (!modal || !form) return;
+  for (const input of form.querySelectorAll('input[name="tool"]')) {
+    input.checked = !!visibleTools[input.value];
+  }
+  if (hint) hint.hidden = true;
+  modal.hidden = false;
+  document.body.classList.add('modal-open');
+  const first = form.querySelector('input[name="tool"]');
+  if (first) first.focus();
+}
+
+function closeSettings() {
+  const modal = document.getElementById('settings-modal');
+  if (!modal) return;
+  modal.hidden = true;
+  document.body.classList.remove('modal-open');
+}
+
+function initSettings() {
+  const btn = document.getElementById('settings-btn');
+  const modal = document.getElementById('settings-modal');
+  const form = document.getElementById('settings-form');
+  if (!btn || !modal || !form) return;
+
+  btn.addEventListener('click', openSettings);
+  modal.addEventListener('click', (e) => {
+    if (e.target && e.target.getAttribute('data-close') === '1') closeSettings();
+  });
+  document.addEventListener('keydown', (e) => {
+    if (e.key === 'Escape' && !modal.hidden) closeSettings();
+  });
+
+  form.addEventListener('submit', (e) => {
+    e.preventDefault();
+    const next = { claude: false, codex: false, cursor: false };
+    for (const input of form.querySelectorAll('input[name="tool"]')) {
+      next[input.value] = !!input.checked;
+    }
+    const hint = document.getElementById('settings-hint');
+    if (!ALL_PROVIDERS.some((k) => next[k])) {
+      if (hint) hint.hidden = false;
+      return;
+    }
+    if (hint) hint.hidden = true;
+    visibleTools = next;
+    saveVisibleTools(visibleTools);
+    closeSettings();
+    if (lastProviders) {
+      renderSummary(lastProviders);
+      const container = document.getElementById('providers');
+      container.innerHTML = '';
+      for (const key of visibleKeys()) {
+        container.append(providerCard(key, lastProviders[key]));
+      }
+    } else {
+      renderSkeletons();
+    }
+  });
 }
 
 // ---------- refresh countdown ----------
@@ -484,16 +740,18 @@ async function refresh() {
     if (!res.ok) throw new Error('HTTP ' + res.status);
     const data = await res.json();
     const providers = data.providers || {};
+    lastProviders = providers;
 
     renderSummary(providers);
 
     const container = document.getElementById('providers');
     container.innerHTML = '';
-    container.append(providerCard('claude', providers.claude));
-    container.append(providerCard('codex', providers.codex));
+    for (const key of visibleKeys()) {
+      container.append(providerCard(key, providers[key]));
+    }
     hasRenderedData = true;
 
-    const anyLive = providers.claude?.rateLimits || providers.codex?.rateLimits;
+    const anyLive = visibleKeys().some((k) => providers[k]?.rateLimits);
     dot.className = anyLive ? 'dot live' : 'dot';
     updated.textContent =
       'Updated ' + new Date(data.generatedAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
@@ -505,6 +763,7 @@ async function refresh() {
   tickCountdown();
 }
 
+initSettings();
 renderSkeletons();
 refresh();
 setInterval(refresh, REFRESH_MS);

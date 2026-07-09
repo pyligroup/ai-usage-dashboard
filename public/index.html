@@ -15,6 +15,20 @@
           <span id="status-dot" class="dot" aria-hidden="true"></span>
           <span id="updated" class="updated">Loading…</span>
           <span id="countdown" class="countdown" aria-live="off"></span>
+          <button
+            type="button"
+            id="settings-btn"
+            class="settings-btn"
+            aria-haspopup="dialog"
+            aria-controls="settings-modal"
+            title="Choose which tools to show"
+          >
+            <span class="sr-only">Settings</span>
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+              <circle cx="12" cy="12" r="3" />
+              <path d="M12 1v2M12 21v2M4.22 4.22l1.42 1.42M18.36 18.36l1.42 1.42M1 12h2M21 12h2M4.22 19.78l1.42-1.42M18.36 5.64l1.42-1.42" />
+            </svg>
+          </button>
         </div>
       </div>
     </header>
@@ -24,12 +38,8 @@
       <section class="summary" aria-label="Usage summary">
         <div class="summary-head">
           <h2 class="summary-title">Rate-limit usage</h2>
-          <p class="summary-legend">
-            <span class="lg lg-claude">Claude %</span> is fetched
-            <strong>live</strong> from Anthropic ·
-            <span class="lg lg-codex">Codex %</span> is read from Codex’s
-            <strong>last on-disk snapshot</strong> (updates only when you run
-            Codex)
+          <p class="summary-legend" id="summary-legend">
+            <!-- filled by app.js from visible providers -->
           </p>
         </div>
         <div class="summary-grid" id="summary-grid">
@@ -45,10 +55,63 @@
 
     <footer class="foot">
       <span
-        >Data read locally from your Claude &amp; Codex CLIs. Live rate-limit
-        endpoints are undocumented and may occasionally be unavailable.</span
+        >Data read locally from your Claude, Codex &amp; Cursor sessions. Live
+        rate-limit endpoints are undocumented and may occasionally be
+        unavailable.</span
       >
     </footer>
+
+    <!-- Tool visibility settings (persisted to a cookie) -->
+    <div id="settings-modal" class="modal" hidden>
+      <div class="modal-backdrop" data-close="1"></div>
+      <div
+        class="modal-panel"
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby="settings-title"
+      >
+        <div class="modal-head">
+          <h2 id="settings-title">Visible tools</h2>
+          <button type="button" class="modal-close" data-close="1" aria-label="Close">
+            ×
+          </button>
+        </div>
+        <p class="modal-desc">
+          Choose which AI tools appear on this dashboard. Saved in a cookie on
+          this machine.
+        </p>
+        <form id="settings-form" class="settings-form">
+          <label class="check-row">
+            <input type="checkbox" name="tool" value="claude" />
+            <span class="check-label">
+              <span class="check-name lg-claude">Claude</span>
+              <span class="check-sub">Anthropic · Claude Code</span>
+            </span>
+          </label>
+          <label class="check-row">
+            <input type="checkbox" name="tool" value="codex" />
+            <span class="check-label">
+              <span class="check-name lg-codex">Codex</span>
+              <span class="check-sub">OpenAI · Codex CLI</span>
+            </span>
+          </label>
+          <label class="check-row">
+            <input type="checkbox" name="tool" value="cursor" />
+            <span class="check-label">
+              <span class="check-name lg-cursor">Cursor</span>
+              <span class="check-sub">Anysphere · Cursor IDE</span>
+            </span>
+          </label>
+          <p id="settings-hint" class="settings-hint" hidden>
+            Pick at least one tool.
+          </p>
+          <div class="modal-actions">
+            <button type="button" class="btn btn-ghost" data-close="1">Cancel</button>
+            <button type="submit" class="btn btn-primary">Save</button>
+          </div>
+        </form>
+      </div>
+    </div>
 
     <script src="app.js"></script>
   </body>

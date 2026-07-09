@@ -8,6 +8,7 @@
   --text-faint: #6b7280;
   --claude: #d97757; /* Anthropic warm coral */
   --codex: #10a37f; /* OpenAI green */
+  --cursor: #6c8cff; /* Cursor blue */
   --ok: #3fb950;
   --warn: #d29922;
   --danger: #f85149;
@@ -148,6 +149,31 @@ main {
 }
 .lg-codex {
   color: var(--codex);
+}
+.lg-cursor {
+  color: var(--cursor);
+}
+
+.settings-btn {
+  display: inline-grid;
+  place-items: center;
+  width: 30px;
+  height: 30px;
+  margin-left: 6px;
+  padding: 0;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--surface);
+  color: var(--text-dim);
+  cursor: pointer;
+  transition: color 0.15s, border-color 0.15s, background 0.15s;
+}
+.settings-btn:hover,
+.settings-btn:focus-visible {
+  color: var(--text);
+  border-color: color-mix(in srgb, var(--text-dim) 40%, var(--border));
+  background: var(--surface-2);
+  outline: none;
 }
 .summary-grid {
   display: grid;
@@ -617,4 +643,136 @@ main {
 }
 .card.skeleton .stat .sk-line {
   margin: 0;
+}
+
+/* ---------- Settings modal ---------- */
+.modal[hidden] {
+  display: none;
+}
+.modal {
+  position: fixed;
+  inset: 0;
+  z-index: 40;
+  display: grid;
+  place-items: center;
+  padding: 20px;
+}
+.modal-backdrop {
+  position: absolute;
+  inset: 0;
+  background: rgba(0, 0, 0, 0.45);
+}
+.modal-panel {
+  position: relative;
+  width: min(400px, 100%);
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  box-shadow: 0 12px 40px rgba(0, 0, 0, 0.35);
+  padding: 18px 18px 16px;
+}
+.modal-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  margin-bottom: 6px;
+}
+.modal-head h2 {
+  margin: 0;
+  font-size: 15px;
+  font-weight: 650;
+}
+.modal-close {
+  border: none;
+  background: transparent;
+  color: var(--text-dim);
+  font-size: 22px;
+  line-height: 1;
+  cursor: pointer;
+  padding: 0 4px;
+}
+.modal-close:hover {
+  color: var(--text);
+}
+.modal-desc {
+  margin: 0 0 14px;
+  font-size: 12.5px;
+  color: var(--text-dim);
+  line-height: 1.45;
+}
+.settings-form {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.check-row {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  padding: 10px 11px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--surface-2);
+  cursor: pointer;
+}
+.check-row:has(input:checked) {
+  border-color: color-mix(in srgb, var(--text-dim) 35%, var(--border));
+}
+.check-row input {
+  margin-top: 3px;
+  accent-color: var(--text);
+}
+.check-label {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+}
+.check-name {
+  font-size: 13.5px;
+  font-weight: 650;
+}
+.check-sub {
+  font-size: 11.5px;
+  color: var(--text-faint);
+}
+.settings-hint {
+  margin: 2px 0 0;
+  font-size: 12px;
+  color: var(--danger);
+}
+.modal-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+  margin-top: 12px;
+}
+.btn {
+  font: inherit;
+  font-size: 13px;
+  font-weight: 600;
+  padding: 7px 14px;
+  border-radius: 8px;
+  border: 1px solid var(--border);
+  cursor: pointer;
+}
+.btn-ghost {
+  background: transparent;
+  color: var(--text-dim);
+}
+.btn-ghost:hover {
+  color: var(--text);
+  background: var(--surface-2);
+}
+.btn-primary {
+  background: var(--text);
+  color: var(--bg);
+  border-color: transparent;
+}
+.btn-primary:hover {
+  opacity: 0.92;
+}
+body.modal-open {
+  overflow: hidden;
 }

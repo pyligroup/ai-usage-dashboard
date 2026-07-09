@@ -1,7 +1,7 @@
 // Local usage dashboard server. No dependencies — Node 20+ built-ins only.
 //
 // Serves the static dashboard from ./public and exposes:
-//   GET /api/usage   -> combined Claude + Codex usage JSON
+//   GET /api/usage   -> combined Claude + Codex + Cursor usage JSON
 //   GET /api/health  -> { ok: true }
 //
 // All the fragile provider logic lives in ./src. The frontend just polls /api/usage.
@@ -12,6 +12,7 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { getClaude } from './src/claude.js';
 import { getCodex } from './src/codex.js';
+import { getCursor } from './src/cursor.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const PUBLIC_DIR = path.join(__dirname, 'public');
@@ -28,12 +29,13 @@ async function buildUsage() {
   const now = Date.now();
   if (_aggCache && now - _aggAt < AGG_TTL_MS) return _aggCache;
 
-  const [claude, codex] = await Promise.all([
+  const [claude, codex, cursor] = await Promise.all([
     getClaude().catch((err) => ({ provider: 'claude', label: 'Claude', available: false, error: String(err) })),
     getCodex().catch((err) => ({ provider: 'codex', label: 'Codex', available: false, error: String(err) })),
+    getCursor().catch((err) => ({ provider: 'cursor', label: 'Cursor', available: false, error: String(err) })),
   ]);
 
-  const payload = { generatedAt: new Date().toISOString(), providers: { claude, codex } };
+  const payload = { generatedAt: new Date().toISOString(), providers: { claude, codex, cursor } };
   _aggCache = payload;
   _aggAt = now;
   return payload;
