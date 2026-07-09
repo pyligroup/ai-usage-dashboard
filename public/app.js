@@ -4,8 +4,16 @@ const REFRESH_MS = 30 * 1000;
 const ALL_PROVIDERS = ['claude', 'codex', 'cursor'];
 const SETTINGS_COOKIE = 'ai_usage_tools';
 const THEME_COOKIE = 'ai_usage_theme';
+const LAYOUT_COOKIE = 'ai_usage_layout';
 const SETTINGS_MAX_AGE_SEC = 60 * 60 * 24 * 365; // 1 year
 const THEME_OPTIONS = ['system', 'light', 'dark'];
+// "fit" kept as an alias for anyone who saved the first Settings label.
+const LAYOUT_OPTIONS = ['default', 'dashboard'];
+
+function normalizeLayout(raw) {
+  if (raw === 'fit' || raw === 'dashboard') return 'dashboard';
+  return LAYOUT_OPTIONS.includes(raw) ? raw : 'default';
+}
 
 const PROVIDER_META = {
   claude: { name: 'Claude', logo: 'C', accent: 'var(--claude)', sub: 'Anthropic · Claude Code' },
@@ -82,6 +90,26 @@ function saveTheme(theme) {
 }
 
 let currentTheme = applyTheme(loadTheme());
+
+// ---------- cookie-backed layout (default | dashboard) ----------
+function loadLayout() {
+  return normalizeLayout(readCookie(LAYOUT_COOKIE));
+}
+
+function applyLayout(layout) {
+  const l = normalizeLayout(layout);
+  if (l === 'default') document.documentElement.removeAttribute('data-layout');
+  else document.documentElement.setAttribute('data-layout', l);
+  return l;
+}
+
+function saveLayout(layout) {
+  const l = applyLayout(layout);
+  writeCookie(LAYOUT_COOKIE, l, SETTINGS_MAX_AGE_SEC);
+  return l;
+}
+
+let currentLayout = applyLayout(loadLayout());
 
 // ---------- helpers ----------
 function fmtCompact(n) {
@@ -432,17 +460,21 @@ function providerCard(key, p) {
     return card;
   }
 
+  // Two panels so live-dashboard layout can place limits | tokens side-by-side.
+  const limitsPanel = el('div', { class: 'card-panel card-limits' });
+  const tokensPanel = el('div', { class: 'card-panel card-tokens' });
+
   // ----- Rate limits (with per-provider provenance line) -----
-  body.append(
+  limitsPanel.append(
     el('div', { class: 'section-label' }, isCursor ? 'Subscription plan usage' : 'Subscription rate limits'),
   );
 
   if (isCursor) {
     const limitSrc = hasLimits ? (rl.stale ? 'live (cached)' : 'live') : null;
     const plan = rl?.plan;
-    body.append(limitRow('Plan (billing cycle)', plan, limitSrc));
-    body.append(limitRow('Auto models', rl?.auto, limitSrc));
-    body.append(limitRow('API / named models', rl?.api, limitSrc));
+    limitsPanel.append(limitRow('Plan (billing cycle)', plan, limitSrc));
+    limitsPanel.append(limitRow('Auto models', rl?.auto, limitSrc));
+    limitsPanel.append(limitRow('API / named models', rl?.api, limitSrc));
     if (!hasLimits) {
       const why =
         p.liveError === 'no-credential'
@@ -450,7 +482,7 @@ function providerCard(key, p) {
           : p.liveError
             ? `Live limits unavailable (${p.liveError}).`
             : 'Live plan % unavailable.';
-      body.append(el('div', { class: 'note' }, why));
+      limitsPanel.append(el('div', { class: 'note' }, why));
     }
   } else {
     const limitSrc = hasLimits
@@ -460,9 +492,9 @@ function providerCard(key, p) {
           : 'live'
         : `saved ${fmtAge(rl.capturedAt)}`
       : null;
-    body.append(limitRow('5-hour window', rl?.fiveHour, limitSrc));
-    body.append(limitRow('Weekly window', rl?.weekly, limitSrc));
-    if (rl?.opusWeekly) body.append(limitRow('Weekly (Opus)', rl.opusWeekly, limitSrc));
+    limitsPanel.append(limitRow('5-hour window', rl?.fiveHour, limitSrc));
+    limitsPanel.append(limitRow('Weekly window', rl?.weekly, limitSrc));
+    if (rl?.opusWeekly) limitsPanel.append(limitRow('Weekly (Opus)', rl.opusWeekly, limitSrc));
 
     if (!hasLimits) {
       const why =
@@ -471,9 +503,9 @@ function providerCard(key, p) {
           : p.liveError
             ? `Live limits unavailable (${p.liveError}) — showing local token totals.`
             : 'Live rate-limit % unavailable — showing local token totals.';
-      body.append(el('div', { class: 'note' }, why));
+      limitsPanel.append(el('div', { class: 'note' }, why));
     } else if (isCodex) {
-      body.append(
+      limitsPanel.append(
         el(
           'div',
           { class: 'note' },
@@ -483,14 +515,12 @@ function providerCard(key, p) {
     }
   }
 
-  body.append(el('div', { class: 'divider' }));
-
   // ----- Token usage -----
   const tokenSrcLabel = isCursor ? 'from Cursor dashboard API' : 'counted from local logs';
   const tokenWindowLabel = isCursor
     ? p.tokens?.windowLabel || 'current period'
     : 'last 30 days';
-  body.append(
+  tokensPanel.append(
     el('div', { class: 'section-label' }, [
       `Token usage · ${tokenWindowLabel}`,
       el('span', { class: 'section-src' }, tokenSrcLabel),
@@ -524,10 +554,10 @@ function providerCard(key, p) {
         }),
       );
     }
-    body.append(stats);
+    tokensPanel.append(stats);
 
     if (isClaude) {
-      body.append(
+      tokensPanel.append(
         el(
           'div',
           {
@@ -559,27 +589,27 @@ function providerCard(key, p) {
       }),
     );
     stats.append(stat('Sessions', fmtCompact(t.sessions), 'conversations in 30d'));
-    body.append(stats);
+    tokensPanel.append(stats);
   }
 
-  // sparkline (Claude/Codex local daily maps; Cursor aggregated endpoint has no per-day)
+  // Daily / session sparkline + by-model — full-width card footer in live dashboard.
+  const trend = el('div', { class: 'card-trend' });
   if (t.daily && Object.keys(t.daily).length) {
-    body.append(
+    trend.append(
       el('div', { class: 'section-label' }, [
         isClaude ? 'Daily tokens' : 'Session tokens',
         el('span', { class: 'section-src' }, 'per day, 30 days'),
       ]),
     );
-    body.append(sparkline(t.daily, meta.accent));
+    trend.append(sparkline(t.daily, meta.accent));
   } else if (isCursor) {
-    body.append(
+    trend.append(
       el('div', { class: 'note' }, 'Per-day sparkline isn’t shown for Cursor — the aggregated endpoint returns totals by model, not by day.'),
     );
   }
 
-  // per-model breakdown (Claude + Cursor)
   if ((isClaude || isCursor) && t.byModel && Object.keys(t.byModel).length) {
-    body.append(
+    trend.append(
       el('div', { class: 'section-label' }, [
         'By model',
         el('span', { class: 'section-src' }, 'share of tokens (incl. cache)'),
@@ -608,13 +638,17 @@ function providerCard(key, p) {
         ]),
       );
     }
-    body.append(models);
+    trend.append(models);
   } else if (isCodex) {
-    body.append(
+    trend.append(
       el('div', { class: 'note' }, 'Per-model breakdown isn’t shown for Codex — its logs don’t split tokens by model.'),
     );
   }
 
+  body.append(limitsPanel);
+  body.append(el('div', { class: 'divider' }));
+  body.append(tokensPanel);
+  if (trend.childNodes.length) body.append(trend);
   card.append(body);
   return card;
 }
@@ -681,11 +715,13 @@ function openSettings() {
   const form = document.getElementById('settings-form');
   const hint = document.getElementById('settings-hint');
   const themeSelect = document.getElementById('theme-select');
+  const layoutFit = document.getElementById('layout-fit');
   if (!modal || !form) return;
   for (const input of form.querySelectorAll('input[name="tool"]')) {
     input.checked = !!visibleTools[input.value];
   }
   if (themeSelect) themeSelect.value = currentTheme;
+  if (layoutFit) layoutFit.checked = currentLayout === 'dashboard';
   if (hint) hint.hidden = true;
   modal.hidden = false;
   document.body.classList.add('modal-open');
@@ -732,6 +768,9 @@ function initSettings() {
     const themeSelect = document.getElementById('theme-select');
     const nextTheme = themeSelect ? themeSelect.value : 'system';
     currentTheme = saveTheme(nextTheme);
+
+    const layoutFit = document.getElementById('layout-fit');
+    currentLayout = saveLayout(layoutFit && layoutFit.checked ? 'dashboard' : 'default');
 
     closeSettings();
     if (lastProviders) {

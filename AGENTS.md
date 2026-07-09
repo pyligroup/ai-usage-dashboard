@@ -18,10 +18,10 @@ trends — so multiple tools' limits can be watched in one window.
   strong reason; adding a dependency is a deliberate decision, not a convenience.
 - **No build step, no framework.** Plain ES modules on the server, plain
   HTML/CSS/vanilla-JS on the client.
-- **Tool visibility** and **color mode** are configurable via a top-right Settings
-  modal; choices are persisted in browser cookies (`ai_usage_tools`,
-  `ai_usage_theme`). Tool filtering is **client-side** — `/api/usage` still
-  returns all providers.
+- **Tool visibility**, **color mode**, and **live dashboard layout** are
+  configurable via a top-right Settings modal; choices are persisted in browser
+  cookies (`ai_usage_tools`, `ai_usage_theme`, `ai_usage_layout`). Tool filtering
+  is **client-side** — `/api/usage` still returns all providers.
 
 ## Run / develop
 
@@ -166,8 +166,11 @@ New code must uphold this.
 - Cookie name: `ai_usage_tools` (JSON like `{"claude":true,"codex":true,"cursor":false}`).
 - Cookie name: `ai_usage_theme` (`system` | `light` | `dark`). Default `system`
   follows `prefers-color-scheme`; light/dark set `data-theme` on `<html>`.
-- Settings gear (top-right) opens a modal (tool checkboxes + color-mode select);
-  Save writes both cookies (`SameSite=Lax`, 1-year max-age). At least one tool
+- Cookie name: `ai_usage_layout` (`default` | `dashboard`). `dashboard` sets
+  `data-layout="dashboard"` for a full-bleed wallboard (legacy cookie value
+  `fit` is treated as `dashboard`).
+- Settings gear (top-right) opens a modal (tool checkboxes + appearance);
+  Save writes cookies (`SameSite=Lax`, 1-year max-age). At least one tool
   must stay selected.
 - Visibility is applied only when rendering summary tiles + provider cards.
   Server always returns the full `providers` object.

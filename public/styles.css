@@ -576,6 +576,250 @@ main {
   text-align: center;
 }
 
+/* ---------- Live dashboard layout (Settings → Appearance) ----------
+   Full-bleed wallboard: use the side margins, one meter row, provider cards
+   as equal columns with limits | tokens side-by-side (no inner scrollbars).
+   Cookie: ai_usage_layout=dashboard (legacy "fit" also maps here). */
+html[data-layout='dashboard'],
+html[data-layout='dashboard'] body {
+  height: 100%;
+}
+html[data-layout='dashboard'] body {
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+html[data-layout='dashboard'] .topbar {
+  flex: 0 0 auto;
+}
+html[data-layout='dashboard'] .topbar-inner,
+html[data-layout='dashboard'] main {
+  max-width: none;
+  width: 100%;
+  padding-left: clamp(16px, 2.2vw, 36px);
+  padding-right: clamp(16px, 2.2vw, 36px);
+}
+html[data-layout='dashboard'] .topbar-inner {
+  height: 48px;
+}
+html[data-layout='dashboard'] .foot {
+  display: none;
+}
+html[data-layout='dashboard'] main {
+  flex: 1 1 auto;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 0;
+  padding-top: 14px;
+  padding-bottom: 14px;
+  overflow: hidden;
+}
+/* Top meters duplicate the limit bars in each provider card — hide them here
+   so the three cards can use the full wallboard height. */
+html[data-layout='dashboard'] .summary {
+  display: none;
+}
+html[data-layout='dashboard'] .providers {
+  flex: 1 1 auto;
+  min-height: 0;
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(0, 1fr));
+  gap: 14px;
+  align-content: stretch;
+}
+html[data-layout='dashboard'] .card {
+  min-height: 0;
+  height: 100%;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+html[data-layout='dashboard'] .card-head {
+  flex: 0 0 auto;
+  padding: 12px 14px;
+}
+html[data-layout='dashboard'] .card-body {
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow: hidden;
+  display: grid;
+  /* Row 1: limits | tokens. Row 2: full-width sparkline + by-model footer. */
+  grid-template-columns: minmax(0, 0.95fr) minmax(0, 1.15fr);
+  grid-template-rows: minmax(0, 1fr) minmax(0, 0.85fr);
+  gap: 12px 16px;
+  padding: 12px 14px 14px;
+  align-items: stretch;
+}
+html[data-layout='dashboard'] .card-body > .divider {
+  display: none;
+}
+html[data-layout='dashboard'] .card-panel {
+  min-width: 0;
+  min-height: 0;
+  height: 100%;
+  overflow: hidden;
+  display: flex;
+  flex-direction: column;
+}
+/* Stretch rate-limit rows so the left column fills its row height. */
+html[data-layout='dashboard'] .card-limits .section-label {
+  flex: 0 0 auto;
+  margin: 0 0 10px;
+}
+html[data-layout='dashboard'] .card-limits .limit-row {
+  flex: 1 1 0;
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+  margin-bottom: 0;
+  min-height: 0;
+  padding: 6px 0;
+}
+html[data-layout='dashboard'] .card-limits .limit-row + .limit-row {
+  border-top: 1px solid var(--border);
+}
+html[data-layout='dashboard'] .card-limits .limit-top {
+  margin-bottom: 8px;
+}
+html[data-layout='dashboard'] .card-limits .bar {
+  height: 10px;
+}
+html[data-layout='dashboard'] .card-limits .note {
+  flex: 0 0 auto;
+  margin-top: auto;
+  padding-top: 10px;
+}
+html[data-layout='dashboard'] .section-label {
+  margin: 0 0 8px;
+}
+html[data-layout='dashboard'] .card-tokens {
+  justify-content: flex-start;
+}
+html[data-layout='dashboard'] .card-tokens > .section-label,
+html[data-layout='dashboard'] .card-tokens > .stats,
+html[data-layout='dashboard'] .card-tokens > .cost-note {
+  flex: 0 0 auto;
+}
+html[data-layout='dashboard'] .card-tokens > .cost-note {
+  margin-top: 8px;
+}
+/* Full-width footer under both columns: daily/session chart + by model. */
+html[data-layout='dashboard'] .card-trend {
+  grid-column: 1 / -1;
+  min-width: 0;
+  min-height: 0;
+  padding-top: 12px;
+  border-top: 1px solid var(--border);
+  display: grid;
+  grid-template-columns: minmax(0, 1.2fr) minmax(0, 1fr);
+  grid-template-rows: auto minmax(0, 1fr);
+  column-gap: 20px;
+  row-gap: 8px;
+  align-content: stretch;
+}
+html[data-layout='dashboard'] .card-trend > .section-label {
+  margin: 0;
+  grid-row: 1;
+}
+html[data-layout='dashboard'] .card-trend > .section-label:first-child {
+  grid-column: 1;
+}
+html[data-layout='dashboard'] .card-trend > .section-label:nth-of-type(2) {
+  grid-column: 2;
+}
+html[data-layout='dashboard'] .card-trend > .spark {
+  grid-column: 1;
+  grid-row: 2;
+  width: 100%;
+  height: 100%;
+  min-height: 72px;
+  align-self: stretch;
+}
+html[data-layout='dashboard'] .card-trend > .models {
+  grid-column: 2;
+  grid-row: 2;
+  min-height: 0;
+  gap: 8px;
+  justify-content: space-evenly;
+  overflow: hidden;
+}
+html[data-layout='dashboard'] .card-trend > .models .model-row {
+  flex: 1 1 0;
+  min-height: 0;
+  align-content: center;
+}
+html[data-layout='dashboard'] .card-trend > .models .model-track {
+  height: 6px;
+}
+html[data-layout='dashboard'] .card-trend > .note {
+  margin-top: 0;
+  grid-column: 1 / -1;
+}
+/* When only sparkline or only models/notes exist, span full footer width. */
+html[data-layout='dashboard'] .card-trend:not(:has(.models)) > .spark,
+html[data-layout='dashboard'] .card-trend:not(:has(.spark)) > .models {
+  grid-column: 1 / -1;
+}
+html[data-layout='dashboard'] .card-trend:not(:has(.models)) > .section-label:first-child,
+html[data-layout='dashboard'] .card-trend:not(:has(.spark)) > .section-label {
+  grid-column: 1 / -1;
+}
+html[data-layout='dashboard'] .stats {
+  gap: 8px;
+}
+html[data-layout='dashboard'] .stat {
+  padding: 9px 10px;
+}
+html[data-layout='dashboard'] .stat-v {
+  font-size: 15px;
+}
+html[data-layout='dashboard'] .note {
+  margin-top: 8px;
+}
+html[data-layout='dashboard'] .unavailable {
+  grid-column: 1 / -1;
+}
+@media (max-width: 900px) {
+  html[data-layout='dashboard'] body {
+    overflow: auto;
+  }
+  html[data-layout='dashboard'] main {
+    overflow: visible;
+    height: auto;
+  }
+  html[data-layout='dashboard'] .providers {
+    grid-template-columns: 1fr;
+    height: auto;
+  }
+  html[data-layout='dashboard'] .card {
+    height: auto;
+  }
+  html[data-layout='dashboard'] .card-body {
+    grid-template-columns: 1fr;
+    grid-template-rows: none;
+    overflow: visible;
+  }
+  html[data-layout='dashboard'] .card-body > .divider {
+    display: block;
+  }
+  html[data-layout='dashboard'] .card-trend {
+    grid-template-columns: 1fr;
+    grid-template-rows: none;
+  }
+  html[data-layout='dashboard'] .card-trend > .section-label,
+  html[data-layout='dashboard'] .card-trend > .spark,
+  html[data-layout='dashboard'] .card-trend > .models,
+  html[data-layout='dashboard'] .card-trend > .note {
+    grid-column: 1;
+    grid-row: auto;
+  }
+  html[data-layout='dashboard'] .card-trend > .spark {
+    min-height: 56px;
+    height: 56px;
+  }
+}
+
 .sr-only {
   position: absolute;
   width: 1px;
@@ -800,6 +1044,9 @@ main {
 .theme-select:focus-visible {
   outline: 2px solid color-mix(in srgb, var(--text-dim) 50%, transparent);
   outline-offset: 1px;
+}
+.layout-row {
+  margin-top: 2px;
 }
 .check-row {
   display: flex;

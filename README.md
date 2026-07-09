@@ -29,6 +29,9 @@ saved in a cookie on this machine.
 The layout is a full dashboard on wide screens and stacks to a single column on
 narrow / mobile widths. Dark and light themes follow your OS setting by default;
 override to Light or Dark in Settings (saved in the `ai_usage_theme` cookie).
+**Live dashboard** (same Settings panel, `ai_usage_layout` cookie) is a
+full-width wallboard: the top meter strip is hidden (those %s already appear
+in each provider card), and limits sit next to tokens inside each card.
 
 ## How it gets the data (pass-through auth, no separate login)
 

@@ -6,12 +6,17 @@
     <title>AI Usage Dashboard</title>
     <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'%3E%3Ctext y='.9em' font-size='90'%3E%F0%9F%93%8A%3C/text%3E%3C/svg%3E" />
     <script>
-      // Apply theme before CSS paints to avoid a flash. Cookie: ai_usage_theme.
+      // Apply theme + layout before CSS paints to avoid a flash.
       (function () {
         try {
           var m = document.cookie.match(/(?:^|;\s*)ai_usage_theme=([^;]*)/);
           var t = m ? decodeURIComponent(m[1]) : 'system';
           if (t === 'light' || t === 'dark') document.documentElement.setAttribute('data-theme', t);
+          var lm = document.cookie.match(/(?:^|;\s*)ai_usage_layout=([^;]*)/);
+          var layout = lm ? decodeURIComponent(lm[1]) : 'default';
+          if (layout === 'fit' || layout === 'dashboard') {
+            document.documentElement.setAttribute('data-layout', 'dashboard');
+          }
         } catch (_) {}
       })();
     </script>
@@ -126,6 +131,16 @@
                 <option value="light">Light</option>
                 <option value="dark">Dark</option>
               </select>
+            </label>
+            <label class="check-row layout-row">
+              <input type="checkbox" name="layout" value="dashboard" id="layout-fit" />
+              <span class="check-label">
+                <span class="check-name">Live dashboard</span>
+                <span class="check-sub"
+                  >Full-width wallboard — hides the top meter strip (same %s are
+                  in each card) and spreads limits + tokens side by side</span
+                >
+              </span>
             </label>
           </div>
           <div class="modal-actions">
