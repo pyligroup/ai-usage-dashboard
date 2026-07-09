@@ -18,9 +18,10 @@ trends — so multiple tools' limits can be watched in one window.
   strong reason; adding a dependency is a deliberate decision, not a convenience.
 - **No build step, no framework.** Plain ES modules on the server, plain
   HTML/CSS/vanilla-JS on the client.
-- **Tool visibility** is configurable via a top-right Settings modal; choices are
-  persisted in a browser cookie (`ai_usage_tools`). Filtering is **client-side** —
-  `/api/usage` still returns all providers.
+- **Tool visibility** and **color mode** are configurable via a top-right Settings
+  modal; choices are persisted in browser cookies (`ai_usage_tools`,
+  `ai_usage_theme`). Tool filtering is **client-side** — `/api/usage` still
+  returns all providers.
 
 ## Run / develop
 
@@ -49,9 +50,10 @@ src/cursor.js        Cursor data logic (live cursor.com dashboard API + local
                      state.vscdb membership metadata).
 src/util.js          Shared fs helpers (recursive listing, JSONL parsing).
 public/index.html    Markup: header, settings modal, summary strip, provider cards.
-public/styles.css    All styling. Dark/light via prefers-color-scheme + tokens.
+public/styles.css    All styling. Dark/light via prefers-color-scheme +
+                     optional cookie override (`data-theme`).
 public/app.js        Fetches /api/usage every 30s, renders, countdown, skeletons,
-                     cookie-backed tool visibility + settings modal.
+                     cookie-backed tool visibility + theme + settings modal.
 macos/               Optional macOS clients (Übersicht desktop widget + SwiftBar
                      menu-bar plugin). Thin `/api/usage` consumers only — no
                      credential or provider logic. See macos/README.md.
@@ -159,11 +161,14 @@ Never let a failed endpoint blank the dashboard or throw out of `getClaude()` /
 `getCodex()` / `getCursor()`; they catch and return `available: false` shapes.
 New code must uphold this.
 
-## Frontend: tool visibility cookie
+## Frontend: settings cookies
 
 - Cookie name: `ai_usage_tools` (JSON like `{"claude":true,"codex":true,"cursor":false}`).
-- Settings gear (top-right) opens a checkbox modal; Save writes the cookie
-  (`SameSite=Lax`, 1-year max-age). At least one tool must stay selected.
+- Cookie name: `ai_usage_theme` (`system` | `light` | `dark`). Default `system`
+  follows `prefers-color-scheme`; light/dark set `data-theme` on `<html>`.
+- Settings gear (top-right) opens a modal (tool checkboxes + color-mode select);
+  Save writes both cookies (`SameSite=Lax`, 1-year max-age). At least one tool
+  must stay selected.
 - Visibility is applied only when rendering summary tiles + provider cards.
   Server always returns the full `providers` object.
 

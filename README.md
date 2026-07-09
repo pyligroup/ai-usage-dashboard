@@ -27,7 +27,8 @@ saved in a cookie on this machine.
   On first load the cards show shimmer **skeletons** rather than empty boxes.
 
 The layout is a full dashboard on wide screens and stacks to a single column on
-narrow / mobile widths. Dark and light themes follow your OS setting.
+narrow / mobile widths. Dark and light themes follow your OS setting by default;
+override to Light or Dark in Settings (saved in the `ai_usage_theme` cookie).
 
 ## How it gets the data (pass-through auth, no separate login)
 

@@ -5,6 +5,16 @@
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <title>AI Usage Dashboard</title>
     <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'%3E%3Ctext y='.9em' font-size='90'%3E%F0%9F%93%8A%3C/text%3E%3C/svg%3E" />
+    <script>
+      // Apply theme before CSS paints to avoid a flash. Cookie: ai_usage_theme.
+      (function () {
+        try {
+          var m = document.cookie.match(/(?:^|;\s*)ai_usage_theme=([^;]*)/);
+          var t = m ? decodeURIComponent(m[1]) : 'system';
+          if (t === 'light' || t === 'dark') document.documentElement.setAttribute('data-theme', t);
+        } catch (_) {}
+      })();
+    </script>
     <link rel="stylesheet" href="styles.css" />
   </head>
   <body>
@@ -21,7 +31,7 @@
             class="settings-btn"
             aria-haspopup="dialog"
             aria-controls="settings-modal"
-            title="Choose which tools to show"
+            title="Settings"
           >
             <span class="sr-only">Settings</span>
             <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
@@ -61,7 +71,7 @@
       >
     </footer>
 
-    <!-- Tool visibility settings (persisted to a cookie) -->
+    <!-- Settings: tool visibility + color mode (cookies) -->
     <div id="settings-modal" class="modal" hidden>
       <div class="modal-backdrop" data-close="1"></div>
       <div
@@ -71,40 +81,53 @@
         aria-labelledby="settings-title"
       >
         <div class="modal-head">
-          <h2 id="settings-title">Visible tools</h2>
+          <h2 id="settings-title">Settings</h2>
           <button type="button" class="modal-close" data-close="1" aria-label="Close">
             ×
           </button>
         </div>
         <p class="modal-desc">
-          Choose which AI tools appear on this dashboard. Saved in a cookie on
-          this machine.
+          Choose visible tools and appearance. Saved in cookies on this machine.
         </p>
         <form id="settings-form" class="settings-form">
-          <label class="check-row">
-            <input type="checkbox" name="tool" value="claude" />
-            <span class="check-label">
-              <span class="check-name lg-claude">Claude</span>
-              <span class="check-sub">Anthropic · Claude Code</span>
-            </span>
-          </label>
-          <label class="check-row">
-            <input type="checkbox" name="tool" value="codex" />
-            <span class="check-label">
-              <span class="check-name lg-codex">Codex</span>
-              <span class="check-sub">OpenAI · Codex CLI</span>
-            </span>
-          </label>
-          <label class="check-row">
-            <input type="checkbox" name="tool" value="cursor" />
-            <span class="check-label">
-              <span class="check-name lg-cursor">Cursor</span>
-              <span class="check-sub">Anysphere · Cursor IDE</span>
-            </span>
-          </label>
-          <p id="settings-hint" class="settings-hint" hidden>
-            Pick at least one tool.
-          </p>
+          <div class="settings-section">
+            <h3 class="settings-section-title">Visible tools</h3>
+            <label class="check-row">
+              <input type="checkbox" name="tool" value="claude" />
+              <span class="check-label">
+                <span class="check-name lg-claude">Claude</span>
+                <span class="check-sub">Anthropic · Claude Code</span>
+              </span>
+            </label>
+            <label class="check-row">
+              <input type="checkbox" name="tool" value="codex" />
+              <span class="check-label">
+                <span class="check-name lg-codex">Codex</span>
+                <span class="check-sub">OpenAI · Codex CLI</span>
+              </span>
+            </label>
+            <label class="check-row">
+              <input type="checkbox" name="tool" value="cursor" />
+              <span class="check-label">
+                <span class="check-name lg-cursor">Cursor</span>
+                <span class="check-sub">Anysphere · Cursor IDE</span>
+              </span>
+            </label>
+            <p id="settings-hint" class="settings-hint" hidden>
+              Pick at least one tool.
+            </p>
+          </div>
+          <div class="settings-section">
+            <h3 class="settings-section-title">Appearance</h3>
+            <label class="theme-row" for="theme-select">
+              <span class="theme-row-label">Color mode</span>
+              <select id="theme-select" name="theme" class="theme-select">
+                <option value="system">System default</option>
+                <option value="light">Light</option>
+                <option value="dark">Dark</option>
+              </select>
+            </label>
+          </div>
           <div class="modal-actions">
             <button type="button" class="btn btn-ghost" data-close="1">Cancel</button>
             <button type="submit" class="btn btn-primary">Save</button>

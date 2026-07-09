@@ -3,7 +3,9 @@
 const REFRESH_MS = 30 * 1000;
 const ALL_PROVIDERS = ['claude', 'codex', 'cursor'];
 const SETTINGS_COOKIE = 'ai_usage_tools';
+const THEME_COOKIE = 'ai_usage_theme';
 const SETTINGS_MAX_AGE_SEC = 60 * 60 * 24 * 365; // 1 year
+const THEME_OPTIONS = ['system', 'light', 'dark'];
 
 const PROVIDER_META = {
   claude: { name: 'Claude', logo: 'C', accent: 'var(--claude)', sub: 'Anthropic · Claude Code' },
@@ -59,6 +61,27 @@ let visibleTools = loadVisibleTools();
 function visibleKeys() {
   return ALL_PROVIDERS.filter((k) => visibleTools[k]);
 }
+
+// ---------- cookie-backed theme (system | light | dark) ----------
+function loadTheme() {
+  const raw = readCookie(THEME_COOKIE);
+  return THEME_OPTIONS.includes(raw) ? raw : 'system';
+}
+
+function applyTheme(theme) {
+  const t = THEME_OPTIONS.includes(theme) ? theme : 'system';
+  if (t === 'system') document.documentElement.removeAttribute('data-theme');
+  else document.documentElement.setAttribute('data-theme', t);
+  return t;
+}
+
+function saveTheme(theme) {
+  const t = applyTheme(theme);
+  writeCookie(THEME_COOKIE, t, SETTINGS_MAX_AGE_SEC);
+  return t;
+}
+
+let currentTheme = applyTheme(loadTheme());
 
 // ---------- helpers ----------
 function fmtCompact(n) {
@@ -644,10 +667,12 @@ function openSettings() {
   const modal = document.getElementById('settings-modal');
   const form = document.getElementById('settings-form');
   const hint = document.getElementById('settings-hint');
+  const themeSelect = document.getElementById('theme-select');
   if (!modal || !form) return;
   for (const input of form.querySelectorAll('input[name="tool"]')) {
     input.checked = !!visibleTools[input.value];
   }
+  if (themeSelect) themeSelect.value = currentTheme;
   if (hint) hint.hidden = true;
   modal.hidden = false;
   document.body.classList.add('modal-open');
@@ -690,6 +715,11 @@ function initSettings() {
     if (hint) hint.hidden = true;
     visibleTools = next;
     saveVisibleTools(visibleTools);
+
+    const themeSelect = document.getElementById('theme-select');
+    const nextTheme = themeSelect ? themeSelect.value : 'system';
+    currentTheme = saveTheme(nextTheme);
+
     closeSettings();
     if (lastProviders) {
       renderSummary(lastProviders);
