@@ -173,29 +173,38 @@ function summaryTile({ provider, label, pct, resetsAt, sourceText, missing, valu
   const meta = PROVIDER_META[provider];
   const color = severityColor(pct);
   const tile = el('div', { class: 'tile', style: `--accent:${meta.accent}` });
-  tile.append(
-    el('div', { class: 'tile-head' }, [
+
+  // Compact meter: identity + % on one row, bar, then reset · provenance.
+  const top = el('div', { class: 'tile-top' }, [
+    el('div', { class: 'tile-id' }, [
       el('span', { class: 'tile-badge' }, meta.name),
       el('span', { class: 'tile-label' }, label),
     ]),
-  );
+  ]);
+
   if (missing) {
-    tile.append(el('div', { class: 'tile-value', style: 'color:var(--text-faint);font-size:20px' }, '—'));
-    tile.append(el('div', { class: 'tile-sub' }, 'no live data'));
+    top.append(el('div', { class: 'tile-value missing' }, '—'));
+    tile.append(top);
+    tile.append(el('div', { class: 'tile-bar empty' }));
+    tile.append(el('div', { class: 'tile-meta' }, 'no live data'));
     return tile;
   }
-  tile.append(
+
+  top.append(
     el('div', { class: 'tile-value', style: `color:${color}` }, [
       String(Math.round(pct)),
       el('span', { class: 'pct' }, '%'),
     ]),
   );
-  tile.append(el('div', { class: 'tile-sub' }, valueHint || fmtReset(resetsAt) || ' '));
+  tile.append(top);
+
   const bar = el('div', { class: 'tile-bar' });
   bar.append(el('span', { style: `width:${Math.min(100, pct)}%;background:${color}` }));
   tile.append(bar);
-  // provenance line — small, muted, always present
-  tile.append(el('div', { class: 'tile-src' }, sourceText));
+
+  const reset = valueHint || fmtReset(resetsAt);
+  const metaParts = [reset, sourceText].filter(Boolean);
+  tile.append(el('div', { class: 'tile-meta' }, metaParts.join(' · ') || ' '));
   return tile;
 }
 
@@ -278,6 +287,8 @@ function renderSummary(providers) {
   const grid = document.getElementById('summary-grid');
   grid.innerHTML = '';
   const keys = visibleKeys();
+  // Two tiles per provider; drives even column counts in CSS (avoids a lone wrap).
+  grid.dataset.count = String(keys.length * 2);
   renderSummaryLegend(keys);
   for (const key of keys) {
     appendProviderSummaryTiles(grid, key, providers[key]);
@@ -611,14 +622,15 @@ function providerCard(key, p) {
 // ---------- skeletons (shown before first data arrives) ----------
 function skeletonTile() {
   return el('div', { class: 'tile skeleton-tile' }, [
-    el('div', { class: 'tile-head' }, [
-      el('span', { class: 'sk sk-badge' }),
-      el('span', { class: 'sk sk-label' }),
+    el('div', { class: 'tile-top' }, [
+      el('div', { class: 'tile-id' }, [
+        el('span', { class: 'sk sk-badge' }),
+        el('span', { class: 'sk sk-label' }),
+      ]),
+      el('span', { class: 'sk sk-value' }),
     ]),
-    el('span', { class: 'sk sk-value' }),
-    el('span', { class: 'sk sk-sub' }),
     el('div', { class: 'tile-bar' }, [el('span', { class: 'sk-bar' })]),
-    el('span', { class: 'sk sk-src' }),
+    el('span', { class: 'sk sk-meta' }),
   ]);
 }
 
@@ -654,6 +666,7 @@ function renderSkeletons() {
   const grid = document.getElementById('summary-grid');
   grid.innerHTML = '';
   const n = Math.max(2, visibleKeys().length * 2);
+  grid.dataset.count = String(n);
   for (let i = 0; i < n; i++) grid.append(skeletonTile());
   const container = document.getElementById('providers');
   container.innerHTML = '';
