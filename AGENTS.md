@@ -52,11 +52,15 @@ public/index.html    Markup: header, settings modal, summary strip, provider car
 public/styles.css    All styling. Dark/light via prefers-color-scheme + tokens.
 public/app.js        Fetches /api/usage every 30s, renders, countdown, skeletons,
                      cookie-backed tool visibility + settings modal.
+macos/               Optional macOS clients (Übersicht desktop widget + SwiftBar
+                     menu-bar plugin). Thin `/api/usage` consumers only — no
+                     credential or provider logic. See macos/README.md.
 ```
 
 **Design rule:** all fragile / provider-specific logic lives in `src/`. The server
-is a thin shell; the frontend only consumes the normalized JSON. Keep it that way —
-if an endpoint schema drifts, there should be exactly one file to fix per provider.
+is a thin shell; the frontend and macOS clients only consume the normalized JSON.
+Keep it that way — if an endpoint schema drifts, there should be exactly one file
+to fix per provider. Do not duplicate Claude/Codex/Cursor fetches in `macos/`.
 
 ## Where the data comes from (READ THIS before touching data logic)
 

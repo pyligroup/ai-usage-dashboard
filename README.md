@@ -72,6 +72,18 @@ npm run dev        # same, restarts on file changes
 
 Leave it pinned in a narrow browser window on the side. It refreshes every 30s.
 
+### macOS: Übersicht + SwiftBar
+
+Optional thin clients under [`macos/`](./macos/) poll the same `/api/usage`
+endpoint (server must be running). See [`macos/README.md`](./macos/README.md)
+for install/symlink steps.
+
+- **Übersicht** — desktop widget (HTML/CSS/JS)
+- **SwiftBar** — menu-bar item **`AI`** (click for Claude / Codex / Cursor detail)
+
+They do not re-read credentials or provider files; Codex still shows as a
+snapshot with age, never “live”.
+
 ### Options (env vars)
 
 | Var | Default | Purpose |
