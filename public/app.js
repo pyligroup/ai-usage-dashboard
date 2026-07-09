@@ -128,16 +128,18 @@ function el(tag, attrs = {}, children = []) {
 
 // ---------- summary strip ----------
 // Each provider's rate-limit % has a different provenance. Say so plainly.
+// Claude/Cursor live values are throttled ~180s server-side — use fetchedAt so
+// we don't claim "just now" when the number is a few minutes old.
 function limitSourceText(provider, rateLimits) {
   if (provider === 'claude') {
-    return rateLimits?.stale
-      ? 'live fetch (using last good value)'
-      : 'live from Anthropic just now';
+    if (rateLimits?.stale) return 'live fetch (using last good value)';
+    const age = rateLimits?.fetchedAt ? fmtAge(rateLimits.fetchedAt) : null;
+    return age ? `live from Anthropic · ${age}` : 'live from Anthropic';
   }
   if (provider === 'cursor') {
-    return rateLimits?.stale
-      ? 'live fetch (using last good value)'
-      : 'live from Cursor just now';
+    if (rateLimits?.stale) return 'live fetch (using last good value)';
+    const age = rateLimits?.fetchedAt ? fmtAge(rateLimits.fetchedAt) : null;
+    return age ? `live from Cursor · ${age}` : 'live from Cursor';
   }
   // codex — from the on-disk snapshot Codex last wrote
   const age = fmtAge(rateLimits?.capturedAt);
@@ -451,9 +453,12 @@ function providerCard(key, p) {
 
   // ----- Token usage -----
   const tokenSrcLabel = isCursor ? 'from Cursor dashboard API' : 'counted from local logs';
+  const tokenWindowLabel = isCursor
+    ? p.tokens?.windowLabel || 'current period'
+    : 'last 30 days';
   body.append(
     el('div', { class: 'section-label' }, [
-      isCursor ? 'Token usage · current period' : 'Token usage · last 30 days',
+      `Token usage · ${tokenWindowLabel}`,
       el('span', { class: 'section-src' }, tokenSrcLabel),
     ]),
   );
@@ -528,7 +533,7 @@ function providerCard(key, p) {
     body.append(
       el('div', { class: 'section-label' }, [
         isClaude ? 'Daily tokens' : 'Session tokens',
-        el('span', { class: 'section-src' }, isClaude ? 'per day, 30 days' : 'by session end-day, 30 days'),
+        el('span', { class: 'section-src' }, 'per day, 30 days'),
       ]),
     );
     body.append(sparkline(t.daily, meta.accent));

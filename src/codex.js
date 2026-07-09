@@ -99,9 +99,43 @@ export async function getCodexRateLimits() {
   return null;
 }
 
+// Fields on Codex total_token_usage / last_token_usage that we aggregate.
+const USAGE_FIELDS = [
+  'total_tokens',
+  'input_tokens',
+  'output_tokens',
+  'reasoning_output_tokens',
+  'cached_input_tokens',
+];
+
+function emptyUsage() {
+  return {
+    total_tokens: 0,
+    input_tokens: 0,
+    output_tokens: 0,
+    reasoning_output_tokens: 0,
+    cached_input_tokens: 0,
+  };
+}
+
+// Non-negative field-wise delta between two cumulative usage snapshots.
+function usageDelta(curr, prev) {
+  const out = emptyUsage();
+  for (const k of USAGE_FIELDS) {
+    out[k] = Math.max(0, (curr?.[k] || 0) - (prev?.[k] || 0));
+  }
+  return out;
+}
+
+function addUsage(acc, delta) {
+  for (const k of USAGE_FIELDS) acc[k] = (acc[k] || 0) + (delta[k] || 0);
+}
+
 // Aggregate token usage from rollout token_count events across a rolling window.
-// total_token_usage in each event is cumulative *for that session*, so we take the
-// max per session file and sum across sessions in the window.
+// total_token_usage is cumulative *for that session*. Taking the final total for
+// any file whose mtime falls in the window over-counts resumed/long-running
+// sessions that started before the cutoff. Instead we walk events and sum
+// in-window deltas (last cumulative in window minus last cumulative before it).
 export async function getCodexTokenUsage({ days = 30 } = {}) {
   const cutoff = Date.now() - days * 24 * 60 * 60 * 1000;
   let files;
@@ -111,42 +145,66 @@ export async function getCodexTokenUsage({ days = 30 } = {}) {
     return { totalTokens: 0, inputTokens: 0, outputTokens: 0, sessions: 0, daily: {} };
   }
 
-  let totalTokens = 0;
-  let inputTokens = 0;
-  let outputTokens = 0;
-  let reasoningTokens = 0;
-  let cachedInputTokens = 0;
+  const sessionAcc = emptyUsage();
   let sessions = 0;
   const daily = {}; // yyyy-mm-dd -> total tokens
 
   for (const f of files) {
     const st = await safeStat(f);
+    // mtime gate: sessions with no activity in the window can't contribute.
+    // Resumed sessions bump mtime, so they still get scanned; deltas below
+    // exclude pre-window cumulative totals.
     if (!st || st.mtimeMs < cutoff) continue;
     const lines = await readJsonlLines(f);
-    // Find the last token_count with total_token_usage (cumulative for the session).
-    let last = null;
-    let lastTs = null;
+
+    let prev = null; // last cumulative snapshot (may be before cutoff)
+    let sawInWindow = false;
+    const fileAcc = emptyUsage();
+
     for (const obj of lines) {
       const payload = obj?.payload && typeof obj.payload === 'object' ? obj.payload : obj;
-      const info = payload?.info;
-      const ttu = info?.total_token_usage;
-      if (ttu && typeof ttu.total_tokens === 'number') {
-        last = ttu;
-        lastTs = obj?.timestamp || lastTs;
+      const ttu = payload?.info?.total_token_usage;
+      if (!ttu || typeof ttu.total_tokens !== 'number') continue;
+
+      const tsMs = obj?.timestamp ? Date.parse(obj.timestamp) || null : null;
+      // Missing timestamps: treat as in-window (file already passed the mtime gate).
+      const inWindow = tsMs == null || tsMs >= cutoff;
+
+      if (inWindow) {
+        // No prior snapshot → session started in-window; take the cumulative as-is.
+        // Otherwise add only the growth since the previous event (which may be
+        // the last pre-cutoff baseline).
+        const delta = prev ? usageDelta(ttu, prev) : pickUsage(ttu);
+        addUsage(fileAcc, delta);
+        const day = new Date(tsMs || st.mtimeMs).toISOString().slice(0, 10);
+        daily[day] = (daily[day] || 0) + (delta.total_tokens || 0);
+        sawInWindow = true;
       }
+      prev = ttu;
     }
-    if (!last) continue;
+
+    if (!sawInWindow) continue;
+    // Count a session only when it contributed tokens inside the window.
+    if ((fileAcc.total_tokens || 0) <= 0) continue;
     sessions += 1;
-    totalTokens += last.total_tokens || 0;
-    inputTokens += last.input_tokens || 0;
-    outputTokens += last.output_tokens || 0;
-    reasoningTokens += last.reasoning_output_tokens || 0;
-    cachedInputTokens += last.cached_input_tokens || 0;
-    const day = (lastTs ? new Date(lastTs) : new Date(st.mtimeMs)).toISOString().slice(0, 10);
-    daily[day] = (daily[day] || 0) + (last.total_tokens || 0);
+    addUsage(sessionAcc, fileAcc);
   }
 
-  return { totalTokens, inputTokens, outputTokens, reasoningTokens, cachedInputTokens, sessions, daily };
+  return {
+    totalTokens: sessionAcc.total_tokens,
+    inputTokens: sessionAcc.input_tokens,
+    outputTokens: sessionAcc.output_tokens,
+    reasoningTokens: sessionAcc.reasoning_output_tokens,
+    cachedInputTokens: sessionAcc.cached_input_tokens,
+    sessions,
+    daily,
+  };
+}
+
+function pickUsage(ttu) {
+  const out = emptyUsage();
+  for (const k of USAGE_FIELDS) out[k] = ttu?.[k] || 0;
+  return out;
 }
 
 export async function getCodexAccountInfo() {

@@ -75,6 +75,9 @@ version-fragile.** Codex is local-only by design.
   builds sometimes write `rate_limits: null`, so walk newest→oldest until one hits.
 - **This means Codex's % is only as fresh as your last Codex run.** It is NOT live.
   The UI must never label it "live" — it says "snapshot · <age>". Preserve that.
+- Token totals (last 30 days): sum **in-window deltas** of per-session
+  `total_token_usage`, not the final cumulative total. Resumed/long-running
+  sessions that started before the cutoff would otherwise over-count.
 - **Never call the live `chatgpt.com/backend-api/wham/usage` endpoint from here, and
   never refresh the Codex OAuth token.** Refreshing independently races Codex's own
   refresh-token rotation and can revoke the user's login. Read-only, always.
@@ -123,10 +126,12 @@ as plan / billing-cycle — **never** as "5-hour" or "weekly".
   - Throttled to **≥180s** between real calls (cached in-module).
 - Token aggregates: `POST https://cursor.com/api/dashboard/get-aggregated-usage-events`
   with `Origin: https://cursor.com` (CSRF required on POSTs) and body
-  `{ teamId: 0, startDate, endDate, userId? }`. Window is billing-cycle start
-  clipped to the last 30 days. Optional `userId` comes from
+  `{ teamId: 0, startDate, endDate, userId? }`. Window is the billing-cycle
+  start when known, otherwise the last 30 days. Do not clip a longer cycle to
+  30 days — that would drop early-cycle usage. Optional `userId` comes from
   `GET https://cursor.com/api/auth/me` when available. Returns per-model token
-  totals + `totalCostCents`. No per-day series on this endpoint — don't invent
+  totals + `totalCostCents`. Multiple aggregation rows for the same
+  `modelIntent` are summed. No per-day series on this endpoint — don't invent
   a sparkline; the UI shows a note instead.
 - Session JWT (read-only, never refresh/write), in order:
   1. `CURSOR_ACCESS_TOKEN` env (raw JWT or `sub::jwt`)
@@ -166,7 +171,8 @@ New code must uphold this.
   bars: plan, auto, and **API / named models**. Never reuse 5-hour / weekly
   labels for Cursor.
 - Token sections: Claude/Codex = "last 30 days" from local logs; Cursor =
-  "current period" from the dashboard API. Cursor has no daily sparkline.
+  billing-cycle ("current period") from the dashboard API when
+  `billingCycleStart` is known, else "last 30 days". Cursor has no daily sparkline.
 - Provenance chips: Claude/Cursor → `live` / `live (cached)` / `tokens only`;
   Codex → `snapshot · <age>` (never "live").
 

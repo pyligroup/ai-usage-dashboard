@@ -314,6 +314,7 @@ export async function getClaude() {
           weekly: live.weekly,
           opusWeekly: live.opusWeekly || null,
           stale: !!live.stale,
+          fetchedAt: live.fetchedAt || null,
         }
       : null,
     liveError: live && live.error ? live.error : !cred ? 'no-credential' : null,

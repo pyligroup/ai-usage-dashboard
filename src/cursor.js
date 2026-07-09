@@ -329,13 +329,15 @@ export async function getCursorLiveUsage(cred) {
     fetchedAt: now,
   };
 
-  // Token aggregates for the rolling 30d window (and clipped to billing cycle
-  // start when that's more recent — matches "current period" intuition).
+  // Token aggregates for the current billing cycle when we know cycleStart;
+  // otherwise fall back to a rolling 30d window. Do NOT clip a longer cycle to
+  // 30 days — that drops early-cycle usage while the UI still says "current period".
   let tokens = emptyTokens();
   try {
     const end = now;
     const thirtyAgo = now - 30 * 24 * 60 * 60 * 1000;
-    const start = cycleStart && cycleStart > thirtyAgo ? cycleStart : thirtyAgo;
+    const start = cycleStart != null ? cycleStart : thirtyAgo;
+    const windowLabel = cycleStart != null ? 'current period' : 'last 30 days';
 
     // Resolve numeric user id (optional filter; empty body also works but
     // scoping to self is clearer for team accounts).
@@ -361,6 +363,9 @@ export async function getCursorLiveUsage(cred) {
     if (aggRes.ok) {
       const agg = await aggRes.json();
       tokens = normalizeAggregated(agg);
+      tokens.windowLabel = windowLabel;
+      tokens.windowStart = start;
+      tokens.windowEnd = end;
     }
   } catch {
     // tokens stay empty — plan % still useful
@@ -389,6 +394,9 @@ function emptyTokens() {
     byModel: {},
     daily: {},
     sessions: 0,
+    windowLabel: null,
+    windowStart: null,
+    windowEnd: null,
   };
 }
 
@@ -410,13 +418,23 @@ function normalizeAggregated(agg) {
     const cacheW = toInt(row.cacheWriteTokens);
     cacheWrite += cacheW;
     const cents = typeof row.totalCents === 'number' ? row.totalCents : 0;
-    byModel[model] = {
-      inputTokens: input,
-      outputTokens: output,
-      cacheReadTokens: cacheRead,
-      cacheWriteTokens: cacheW,
-      estCostUSD: cents / 100,
-    };
+    // Cursor may return multiple aggregation rows per modelIntent — accumulate.
+    const prev = byModel[model];
+    if (prev) {
+      prev.inputTokens += input;
+      prev.outputTokens += output;
+      prev.cacheReadTokens += cacheRead;
+      prev.cacheWriteTokens += cacheW;
+      prev.estCostUSD += cents / 100;
+    } else {
+      byModel[model] = {
+        inputTokens: input,
+        outputTokens: output,
+        cacheReadTokens: cacheRead,
+        cacheWriteTokens: cacheW,
+        estCostUSD: cents / 100,
+      };
+    }
   }
   acc.cacheWriteTokens = cacheWrite;
   acc.byModel = byModel;
@@ -450,6 +468,16 @@ export async function getCursor() {
   const tokens = live?.tokens || emptyTokens();
   const hasTokens = tokens.totalTokens > 0;
 
+  // Propagate top-level live.stale onto rateLimits so the UI chip/source text
+  // can distinguish a fresh fetch from a kept-last-good cache hit.
+  const rateLimits = hasLimits
+    ? {
+        ...live.rateLimits,
+        stale: !!(live.stale || live.rateLimits.stale),
+        fetchedAt: live.rateLimits.fetchedAt || live.fetchedAt || null,
+      }
+    : null;
+
   return {
     provider: 'cursor',
     label: 'Cursor',
@@ -457,7 +485,7 @@ export async function getCursor() {
     membershipType: live?.membershipType || cred.membershipType || null,
     subscriptionStatus: cred.subscriptionStatus || null,
     email: cred.email || null,
-    rateLimits: hasLimits ? live.rateLimits : null,
+    rateLimits,
     tokens,
     liveError: live && live.error ? live.error : null,
     source: hasLimits ? 'live-endpoint' : hasTokens ? 'live-tokens-only' : 'local-membership-only',
