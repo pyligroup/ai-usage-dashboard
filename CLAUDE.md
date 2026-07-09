@@ -7,10 +7,10 @@ Guidance for Claude Code (and other AI agents) working in this repository.
 
 ## What this is
 
-A small, local, cross-platform (macOS + Windows) web dashboard that shows
-**Claude Code**, **Codex CLI**, and **Cursor** subscription usage side-by-side —
-rate-limit / plan utilization, reset countdowns, and token trends — so multiple
-tools' limits can be watched in one window.
+A small, local, cross-platform (macOS, Windows, and Linux) web dashboard that
+shows **Claude Code**, **Codex CLI**, and **Cursor** subscription usage
+side-by-side — rate-limit / plan utilization, reset countdowns, and token
+trends — so multiple tools' limits can be watched in one window.
 
 - **Runtime:** Node.js ≥ 20. **Zero runtime dependencies** — built-ins only
   (`node:http`, `node:fs`, `fetch`, `execFile`). Keep it that way unless there's a
@@ -84,7 +84,8 @@ version-fragile.** Codex is local-only by design.
   `Authorization: Bearer <token>`, `anthropic-beta: oauth-2025-04-20`, and a
   **real `User-Agent: claude-code/<version>`** (a missing/fake UA gets aggressively
   429'd — do not remove it). Returns `five_hour.utilization` and
-  `seven_day.utilization` (already **percent**, 0–100) plus `resets_at`.
+  `seven_day.utilization` (already **percent**, 0–100) plus `resets_at`, and
+  optionally `seven_day_opus` (shown as "Weekly (Opus)" when present).
   - Throttled to **≥180s** between real calls (cached in-module) to avoid 429s.
 - The OAuth token is read from where Claude Code already stores it (pass-through
   auth, no separate login): macOS Keychain service `Claude Code-credentials`, or
@@ -106,18 +107,26 @@ as plan / billing-cycle — **never** as "5-hour" or "weekly".
 - Live plan %: `GET https://cursor.com/api/usage-summary` with cookie
   `WorkosCursorSessionToken=<cookieId>::<jwt>` where `<cookieId>` is the trailing
   `user_…` segment of the JWT `sub` (full `sub` also works). Returns
-  `individualUsage.plan.{used,limit,remaining,autoPercentUsed,apiPercentUsed,…}`
-  and billing cycle timestamps.
+  `individualUsage.plan.{used,limit,remaining,totalPercentUsed,autoPercentUsed,apiPercentUsed,…}`,
+  optional `individualUsage.onDemand`, and billing cycle timestamps.
   - Headline plan % MUST be **`totalPercentUsed`** — that is what
     cursor.com/dashboard Spending shows as "Total Usage" and what gates the
     included allowance. `used`/`limit` appear to be USD cents of the included
     pool (e.g. 225/2000 = $2.25 of $20) and can disagree sharply with the %
-    meter because auto vs API models are weighted differently.
+    meter because auto vs API models are weighted differently. Do **not**
+    compute headline % from `used / limit`.
+  - Normalized `rateLimits` shape: `plan`, `auto`, `api`, plus optional
+    `onDemand` / billing-cycle timestamps. The UI summary strip shows plan +
+    auto; the Cursor card also shows API / named models. `onDemand` is kept in
+    the payload for future use but is not rendered today.
   - Throttled to **≥180s** between real calls (cached in-module).
 - Token aggregates: `POST https://cursor.com/api/dashboard/get-aggregated-usage-events`
   with `Origin: https://cursor.com` (CSRF required on POSTs) and body
-  `{ teamId: 0, startDate, endDate, userId? }`. Returns per-model token totals +
-  `totalCostCents`. No per-day series on this endpoint — don't invent a sparkline.
+  `{ teamId: 0, startDate, endDate, userId? }`. Window is billing-cycle start
+  clipped to the last 30 days. Optional `userId` comes from
+  `GET https://cursor.com/api/auth/me` when available. Returns per-model token
+  totals + `totalCostCents`. No per-day series on this endpoint — don't invent
+  a sparkline; the UI shows a note instead.
 - Session JWT (read-only, never refresh/write), in order:
   1. `CURSOR_ACCESS_TOKEN` env (raw JWT or `sub::jwt`)
   2. Cursor IDE `state.vscdb` → `ItemTable` key `cursorAuth/accessToken`
@@ -148,6 +157,18 @@ New code must uphold this.
 - Visibility is applied only when rendering summary tiles + provider cards.
   Server always returns the full `providers` object.
 
+## Frontend: provider-specific UI contract
+
+- Claude / Codex summary tiles: **5-hour** + **weekly**. Cards may also show
+  Claude **Weekly (Opus)** when `opusWeekly` is present.
+- Cursor summary tiles: **plan (billing cycle)** + **auto models**. Cursor card
+  bars: plan, auto, and **API / named models**. Never reuse 5-hour / weekly
+  labels for Cursor.
+- Token sections: Claude/Codex = "last 30 days" from local logs; Cursor =
+  "current period" from the dashboard API. Cursor has no daily sparkline.
+- Provenance chips: Claude/Cursor → `live` / `live (cached)` / `tokens only`;
+  Codex → `snapshot · <age>` (never "live").
+
 ## Product principles (why the UI is the way it is)
 
 - **Every number states what it represents and where it came from.** The user
@@ -155,7 +176,8 @@ New code must uphold this.
   provenance (live vs local snapshot vs computed estimate).
 - **Honesty over polish.** Codex "live" was a real bug we fixed — it was a disk
   snapshot mislabeled as live. Cursor plan % must not be labeled as a 5-hour
-  window. Don't reintroduce that class of mistake.
+  window, and must use `totalPercentUsed` (not `used/limit`) so it matches
+  Spending / cutoff. Don't reintroduce that class of mistake.
 - **Token "totals" are often cache-dominated** (Claude + Cursor). Split
   "Real work" (input+output) from "Cache reads". Keep them distinct; a blended
   total misleads.
@@ -193,7 +215,9 @@ There is no CI to lean on. Before saying a change works:
   never log or exfiltrate credentials.
 - Outbound network calls are limited to:
   - Claude: `api.anthropic.com/api/oauth/usage`
-  - Cursor: `cursor.com` usage/dashboard endpoints (session cookie auth)
+  - Cursor: `cursor.com` usage/dashboard/auth endpoints used today
+    (`/api/usage-summary`, `/api/dashboard/get-aggregated-usage-events`,
+    `/api/auth/me`) with session cookie auth
   Adding any other outbound call is a deliberate, reviewed decision. Codex stays
   offline.
 - Path-traversal guard in the static file server (`server.js`) must stay.
