@@ -202,11 +202,8 @@ function appendProviderSummaryTiles(grid, key, p) {
 
   if (key === 'cursor') {
     // Cursor meters a billing-cycle plan allowance — never label these as 5-hour/weekly.
+    // Headline % is totalPercentUsed (matches Spending "Total Usage" / cutoff).
     const plan = rl?.plan;
-    let hint = fmtReset(plan?.resetsAt) || '';
-    if (plan?.used != null && plan?.limit != null) {
-      hint = `${Math.round(plan.used)} / ${Math.round(plan.limit)} included` + (hint ? ` · ${hint}` : '');
-    }
     grid.append(
       summaryTile({
         provider: key,
@@ -215,7 +212,6 @@ function appendProviderSummaryTiles(grid, key, p) {
         resetsAt: plan?.resetsAt,
         sourceText: src,
         missing: !plan,
-        valueHint: hint || undefined,
       }),
     );
     grid.append(
@@ -364,7 +360,7 @@ function providerCard(key, p) {
     chipText = rl.stale ? 'live (cached)' : 'live';
     chipCls = 'chip live';
     chipTip =
-      'Fetched live from Cursor (cursor.com/api/usage-summary). Plan % is billing-cycle included usage, not a 5-hour window.';
+      'Fetched live from Cursor (cursor.com/api/usage-summary). Plan % matches Spending "Total Usage" (billing-cycle cutoff), not a 5-hour window.';
   } else {
     chipText = `snapshot · ${fmtAge(rl.capturedAt)}`;
     chipCls = 'chip snapshot';
@@ -411,17 +407,7 @@ function providerCard(key, p) {
     body.append(limitRow('Plan (billing cycle)', plan, limitSrc));
     body.append(limitRow('Auto models', rl?.auto, limitSrc));
     body.append(limitRow('API / named models', rl?.api, limitSrc));
-    if (plan?.used != null && plan?.limit != null) {
-      body.append(
-        el(
-          'div',
-          { class: 'note' },
-          `Included usage: ${Math.round(plan.used)} / ${Math.round(plan.limit)}` +
-            (plan.remaining != null ? ` · ${Math.round(plan.remaining)} remaining` : '') +
-            '. Cursor meters a billing-cycle allowance — not a 5-hour or weekly window.',
-        ),
-      );
-    } else if (!hasLimits) {
+    if (!hasLimits) {
       const why =
         p.liveError === 'no-credential'
           ? 'No Cursor session found — sign in to the Cursor app, then refresh.'

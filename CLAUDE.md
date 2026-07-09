@@ -108,8 +108,11 @@ as plan / billing-cycle — **never** as "5-hour" or "weekly".
   `user_…` segment of the JWT `sub` (full `sub` also works). Returns
   `individualUsage.plan.{used,limit,remaining,autoPercentUsed,apiPercentUsed,…}`
   and billing cycle timestamps.
-  - Headline plan % should prefer **`used / limit`**, not blindly
-    `totalPercentUsed` (those can disagree).
+  - Headline plan % MUST be **`totalPercentUsed`** — that is what
+    cursor.com/dashboard Spending shows as "Total Usage" and what gates the
+    included allowance. `used`/`limit` appear to be USD cents of the included
+    pool (e.g. 225/2000 = $2.25 of $20) and can disagree sharply with the %
+    meter because auto vs API models are weighted differently.
   - Throttled to **≥180s** between real calls (cached in-module).
 - Token aggregates: `POST https://cursor.com/api/dashboard/get-aggregated-usage-events`
   with `Origin: https://cursor.com` (CSRF required on POSTs) and body

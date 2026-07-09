@@ -290,16 +290,12 @@ export async function getCursorLiveUsage(cred) {
   const cycleEnd = parseIsoMs(summary?.billingCycleEnd);
   const cycleStart = parseIsoMs(summary?.billingCycleStart);
 
-  // Prefer used/limit for the headline plan meter. Cursor's totalPercentUsed can
-  // disagree with used/limit (e.g. ~0.45 vs 88/2000 ≈ 4.4%) depending on how
-  // auto/API buckets are weighted — used/limit matches the dashboard copy
-  // ("You've used N% of your included usage").
-  let planPct = null;
-  if (plan && typeof plan.used === 'number' && typeof plan.limit === 'number' && plan.limit > 0) {
-    planPct = Math.max(0, Math.min(100, (plan.used / plan.limit) * 100));
-  } else {
-    planPct = pickPercent(plan?.totalPercentUsed);
-  }
+  // Headline plan % MUST be totalPercentUsed — that is what cursor.com/dashboard
+  // Spending shows as "Total Usage" and what gates the included allowance.
+  // used/limit is a separate unit (appears to be USD cents of the included pool,
+  // e.g. 225/2000 = $2.25 of $20) and can disagree sharply with totalPercentUsed
+  // because auto vs API models are weighted differently in the % meter.
+  const planPct = pickPercent(plan?.totalPercentUsed);
   // auto/api splits are reported as already-percent fields (0–100).
   const autoPct = pickPercent(plan?.autoPercentUsed);
   const apiPct = pickPercent(plan?.apiPercentUsed);
@@ -311,6 +307,7 @@ export async function getCursorLiveUsage(cred) {
       : {
           usedPercent: planPct,
           resetsAt: cycleEnd,
+          // used/limit/remaining look like USD cents of the included pool.
           used: typeof plan?.used === 'number' ? plan.used : null,
           limit: typeof plan?.limit === 'number' ? plan.limit : null,
           remaining: typeof plan?.remaining === 'number' ? plan.remaining : null,
