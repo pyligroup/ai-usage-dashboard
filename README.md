@@ -72,6 +72,14 @@ npm run dev        # same, restarts on file changes
 
 Leave it pinned in a narrow browser window on the side. It refreshes every 30s.
 
+To open the dashboard from another device on your LAN (phone, another laptop):
+
+```bash
+HOST=0.0.0.0 npm start
+```
+
+The startup log prints `Network: http://<your-lan-ip>:4317` URLs. Use one of those from the other device — not `127.0.0.1` (that always means “this machine”). Default remains localhost-only because the server reads local credentials.
+
 ### macOS: Übersicht + SwiftBar
 
 Optional thin clients under [`macos/`](./macos/) poll the same `/api/usage`

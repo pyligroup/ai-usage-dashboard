@@ -8,6 +8,7 @@
 
 import http from 'node:http';
 import { promises as fs } from 'node:fs';
+import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { getClaude } from './src/claude.js';
@@ -18,6 +19,17 @@ const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const PUBLIC_DIR = path.join(__dirname, 'public');
 const PORT = Number(process.env.PORT) || 4317;
 const HOST = process.env.HOST || '127.0.0.1';
+
+/** Non-loopback IPv4 addresses for LAN URL hints when binding 0.0.0.0. */
+function lanIPv4Addresses() {
+  const out = [];
+  for (const addrs of Object.values(os.networkInterfaces())) {
+    for (const a of addrs || []) {
+      if (a.family === 'IPv4' && !a.internal) out.push(a.address);
+    }
+  }
+  return out;
+}
 
 // Filesystem scans are cheap but not free; cache the aggregate briefly so a
 // 30s-polling browser (or several tabs) doesn't re-walk the logs every request.
@@ -92,7 +104,20 @@ const server = http.createServer(async (req, res) => {
 });
 
 server.listen(PORT, HOST, () => {
-  const url = `http://${HOST === '0.0.0.0' ? 'localhost' : HOST}:${PORT}`;
-  console.log(`\n  AI Usage Dashboard running at ${url}\n`);
-  console.log('  Press Ctrl+C to stop.\n');
+  const localUrl = `http://${HOST === '0.0.0.0' || HOST === '::' ? '127.0.0.1' : HOST}:${PORT}`;
+  console.log(`\n  AI Usage Dashboard`);
+  console.log(`  Local:   ${localUrl}`);
+  if (HOST === '0.0.0.0' || HOST === '::') {
+    const lan = lanIPv4Addresses();
+    if (lan.length) {
+      for (const ip of lan) console.log(`  Network: http://${ip}:${PORT}`);
+    } else {
+      console.log(`  Network: (no LAN IPv4 found; still listening on ${HOST}:${PORT})`);
+    }
+    console.log(`\n  Bound to ${HOST} — reachable on your LAN. Anyone on the network can`);
+    console.log(`  open the URLs above (this reads local AI credentials / usage).`);
+  } else if (HOST === '127.0.0.1' || HOST === '::1') {
+    console.log(`\n  Localhost-only. For other machines: HOST=0.0.0.0 npm start`);
+  }
+  console.log('\n  Press Ctrl+C to stop.\n');
 });
