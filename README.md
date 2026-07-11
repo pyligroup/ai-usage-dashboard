@@ -8,6 +8,9 @@ trends — so you don't need separate windows for each tool.
 Use the **Settings** gear (top-right) to choose which tools appear; the choice is
 saved in a cookie on this machine.
 
+> Unofficial project — not affiliated with Anthropic, OpenAI, or Cursor. See the
+> [Disclaimer](#disclaimer) below.
+
 ## What it shows
 
 - **Summary strip** (top): headline utilization for each visible tool, with reset
@@ -129,6 +132,16 @@ anywhere. Codex stays fully offline.
 - Cursor’s `plan.used` / `plan.limit` fields look like a separate included-pool
   unit (often USD cents) and can disagree with `totalPercentUsed`; this dashboard
   intentionally follows **Total Usage** so the % matches when your plan cuts off.
+
+## Disclaimer
+
+This is an **unofficial** tool, not affiliated with or endorsed by Anthropic,
+OpenAI, or Cursor (Anysphere). The Claude and Cursor providers rely on
+**undocumented endpoints** — the same ones each vendor's own dashboard uses —
+which may change or stop working at any time without notice. The dashboard only
+ever *reads* your own usage data with the credentials already on your machine,
+but automated access to these services may not be covered by each vendor's
+terms of service. Use it with your own account, at your own discretion.
 
 ## Agent docs
 

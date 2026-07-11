@@ -47,7 +47,7 @@ Codex’s caption is `snapshot · Xm ago` from `rateLimits.capturedAt`.
 3. Symlink the plugin (keep the `.30s.` segment — that is the refresh interval):
 
 ```bash
-REPO="/Users/dkrinke/Projects/Krinkoid/ai-usage-dashboard"   # your clone path
+REPO="$HOME/ai-usage-dashboard"                               # your clone path
 PLUGINS="$HOME/Library/Application Support/SwiftBar/Plugins"  # or your chosen folder
 
 mkdir -p "$PLUGINS"
