@@ -240,6 +240,25 @@ function sparkline(dailyMap, accent) {
   return svg;
 }
 
+// Fraction (0..1) of a fixed-length window that has elapsed right now, so the UI
+// can mark "time used" against "allowance used" for pacing. Works from either an
+// explicit windowStartsAt (Cursor billing cycle) or a windowMinutes length plus
+// resetsAt (Claude/Codex 5-hour & weekly). Returns null for windows with no fixed
+// length or reset (e.g. Claude usage credits / monthly spend caps) — no marker.
+function windowElapsedFraction(win) {
+  if (!win || !win.resetsAt) return null;
+  let startMs = null;
+  if (typeof win.windowStartsAt === 'number') {
+    startMs = win.windowStartsAt;
+  } else if (typeof win.windowMinutes === 'number' && win.windowMinutes > 0) {
+    startMs = win.resetsAt - win.windowMinutes * 60000;
+  }
+  if (startMs == null) return null;
+  const total = win.resetsAt - startMs;
+  if (!(total > 0)) return null;
+  return Math.max(0, Math.min(1, (Date.now() - startMs) / total));
+}
+
 // ---------- provider card ----------
 function limitRow(name, win, sourceText, valueHint) {
   if (!win) {
@@ -258,19 +277,35 @@ function limitRow(name, win, sourceText, valueHint) {
     pct == null
       ? el('span', { class: 'limit-pct', style: 'color:var(--text-faint)' }, '—')
       : el('span', { class: 'limit-pct', style: `color:${color}` }, `${Math.round(pct)}%`);
-  const metaParts = [valueHint, fmtReset(win.resetsAt)].filter(Boolean);
+  // Pace marker: where "now" sits inside the time window, so the user can see
+  // whether allowance-used (bar fill) is ahead of or behind time-elapsed.
+  const elapsed = windowElapsedFraction(win);
+  const barChildren = [
+    el('span', {
+      style: `width:${pct == null ? 0 : Math.min(100, pct)}%;background:${color}`,
+    }),
+  ];
+  if (elapsed != null) {
+    const elapsedPct = Math.round(elapsed * 100);
+    barChildren.push(
+      el('i', {
+        class: 'bar-pace',
+        style: `left:${(elapsed * 100).toFixed(1)}%`,
+        title: `${elapsedPct}% of this window has elapsed — the bar fill left of this line means you're pacing under the clock; past it means you're ahead of pace.`,
+      }),
+    );
+  }
+  const metaParts = [valueHint, fmtReset(win.resetsAt)];
+  if (elapsed != null) metaParts.push(`${Math.round(elapsed * 100)}% elapsed`);
+  const meta = metaParts.filter(Boolean);
   return el('div', { class: 'limit-row' }, [
     el('div', { class: 'limit-top' }, [
       el('span', { class: 'limit-name' }, name),
       pctLabel,
     ]),
-    el('div', { class: 'bar' }, [
-      el('span', {
-        style: `width:${pct == null ? 0 : Math.min(100, pct)}%;background:${color}`,
-      }),
-    ]),
+    el('div', { class: 'bar' }, barChildren),
     el('div', { class: 'limit-reset' }, [
-      metaParts.join(' · ') || ' ',
+      meta.join(' · ') || ' ',
       sourceText ? el('span', { class: 'limit-src' }, ` · ${sourceText}`) : null,
     ]),
   ]);
