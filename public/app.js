@@ -11,9 +11,9 @@ const THEME_OPTIONS = ['system', 'light', 'dark'];
 const LEGACY_COMPACT_LAYOUTS = new Set(['dashboard', 'fit', 'compact']);
 
 const PROVIDER_META = {
-  claude: { name: 'Claude', logo: 'C', accent: 'var(--claude)', sub: 'Anthropic · Claude Code' },
-  codex: { name: 'Codex', logo: 'Cx', accent: 'var(--codex)', sub: 'OpenAI · Codex CLI' },
-  cursor: { name: 'Cursor', logo: 'Cu', accent: 'var(--cursor)', sub: 'Anysphere · Cursor IDE' },
+  claude: { name: 'Claude', logo: 'C', accent: 'var(--claude)', sub: 'Anthropic · Claude Code', url: 'https://claude.ai/settings/usage' },
+  codex: { name: 'Codex', logo: 'Cx', accent: 'var(--codex)', sub: 'OpenAI · Codex CLI', url: 'https://chatgpt.com/codex/settings/usage' },
+  cursor: { name: 'Cursor', logo: 'Cu', accent: 'var(--cursor)', sub: 'Anysphere · Cursor IDE', url: 'https://cursor.com/dashboard/spending' },
 };
 
 // ---------- cookie helpers ----------
@@ -614,10 +614,12 @@ function providerCard(key, p, { extraOpen } = {}) {
 
   card.append(
     el('div', { class: 'card-head' }, [
-      el('div', { class: 'card-logo', style: `background:${meta.accent}` }, meta.logo),
-      el('div', {}, [
-        el('div', { class: 'card-title' }, meta.name),
-        el('div', { class: 'card-sub' }, subText),
+      el('a', { class: 'card-head-link', href: meta.url, target: '_blank', rel: 'noopener noreferrer', title: `Open ${meta.name} usage page` }, [
+        el('div', { class: 'card-logo', style: `background:${meta.accent}` }, meta.logo),
+        el('div', {}, [
+          el('div', { class: 'card-title' }, meta.name),
+          el('div', { class: 'card-sub' }, subText),
+        ]),
       ]),
       el('span', { class: chipCls, title: chipTip }, chipText),
     ]),
