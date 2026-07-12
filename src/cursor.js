@@ -302,18 +302,21 @@ export async function getCursorLiveUsage(cred) {
 
   const rateLimits = {
     // Cursor-specific windows — NOT 5-hour / weekly.
+    // windowStartsAt (billing-cycle start) lets the UI show how far through the
+    // billing cycle we are as a pace marker on the plan bars.
     plan: planPct == null
       ? null
       : {
           usedPercent: planPct,
           resetsAt: cycleEnd,
+          windowStartsAt: cycleStart,
           // used/limit/remaining look like USD cents of the included pool.
           used: typeof plan?.used === 'number' ? plan.used : null,
           limit: typeof plan?.limit === 'number' ? plan.limit : null,
           remaining: typeof plan?.remaining === 'number' ? plan.remaining : null,
         },
-    auto: autoPct == null ? null : { usedPercent: autoPct, resetsAt: cycleEnd },
-    api: apiPct == null ? null : { usedPercent: apiPct, resetsAt: cycleEnd },
+    auto: autoPct == null ? null : { usedPercent: autoPct, resetsAt: cycleEnd, windowStartsAt: cycleStart },
+    api: apiPct == null ? null : { usedPercent: apiPct, resetsAt: cycleEnd, windowStartsAt: cycleStart },
     onDemand: onDemand?.enabled
       ? (() => {
           const used = typeof onDemand.used === 'number' ? onDemand.used : null;
@@ -329,6 +332,7 @@ export async function getCursorLiveUsage(cred) {
             used,
             limit,
             resetsAt: cycleEnd,
+            windowStartsAt: cycleStart,
           };
         })()
       : null,

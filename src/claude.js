@@ -92,7 +92,10 @@ async function detectClaudeVersion() {
   return '2.0.0';
 }
 
-function pickWindow(win) {
+// windowMinutes: the window's fixed length (300 = 5-hour, 10080 = weekly).
+// The API doesn't return it, so callers pass it; it lets the UI derive the
+// window start (resetsAt - length) and show a "time elapsed" pace marker.
+function pickWindow(win, windowMinutes = null) {
   if (!win || typeof win !== 'object') return null;
   const util =
     typeof win.utilization === 'number'
@@ -108,7 +111,7 @@ function pickWindow(win) {
   if (typeof win.resets_at === 'string') resetsAt = Date.parse(win.resets_at) || null;
   else if (typeof win.resets_at === 'number')
     resetsAt = win.resets_at < 1e12 ? win.resets_at * 1000 : win.resets_at;
-  return { usedPercent, resetsAt };
+  return { usedPercent, resetsAt, windowMinutes };
 }
 
 // Convert { amount_minor, exponent } (or credit-count + decimal_places) to a
@@ -301,10 +304,16 @@ function pickScopedLimits(limits, { hasOpusWeekly = false } = {}) {
     else if (typeof entry.resets_at === 'number')
       resetsAt = entry.resets_at < 1e12 ? entry.resets_at * 1000 : entry.resets_at;
 
+    // Scoped limits are weekly windows (kind weekly_scoped / group weekly);
+    // give them the 7-day length so the UI can show a pace marker.
+    const isWeeklyScoped =
+      (typeof kind === 'string' && kind.startsWith('weekly')) ||
+      (typeof entry.group === 'string' && entry.group === 'weekly');
     const item = {
       label: scopedLimitLabel(entry),
       usedPercent: Math.max(0, Math.min(100, pct)),
       resetsAt,
+      windowMinutes: isWeeklyScoped ? 10080 : null,
       kind,
       group: typeof entry.group === 'string' ? entry.group : null,
     };
@@ -357,9 +366,9 @@ export async function getClaudeLiveUsage(cred) {
     return _cachedUsage;
   }
 
-  const fiveHour = pickWindow(data.five_hour);
-  const weekly = pickWindow(data.seven_day);
-  const opusWeekly = pickWindow(data.seven_day_opus);
+  const fiveHour = pickWindow(data.five_hour, 300);
+  const weekly = pickWindow(data.seven_day, 10080);
+  const opusWeekly = pickWindow(data.seven_day_opus, 10080);
   const extraUsage = pickExtraUsage(data.spend, data.extra_usage);
   const scoped = pickScopedLimits(data.limits, { hasOpusWeekly: !!opusWeekly });
   const normalized = {
