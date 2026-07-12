@@ -1,0 +1,9 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" role="img" aria-label="AI Usage">
+  <rect width="512" height="512" rx="112" fill="#0f1115"/>
+  <rect x="128" y="170" width="256" height="26" rx="13" fill="#22262f"/>
+  <rect x="128" y="170" width="240" height="26" rx="13" fill="#f85149"/>
+  <rect x="128" y="243" width="256" height="26" rx="13" fill="#22262f"/>
+  <rect x="128" y="243" width="196" height="26" rx="13" fill="#d29922"/>
+  <rect x="128" y="316" width="256" height="26" rx="13" fill="#22262f"/>
+  <rect x="128" y="316" width="72"  height="26" rx="13" fill="#3fb950"/>
+</svg>

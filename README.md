@@ -98,6 +98,22 @@ npm run dev        # same, restarts on file changes
 
 Leave it pinned in a narrow browser window on the side. It refreshes every 30s.
 
+### Install as a standalone window (Chrome)
+
+The dashboard ships a [web app manifest](./public/manifest.webmanifest) and
+app icon so Chrome can open it **full-screen with no browser toolbar** — just
+the content — with a Dock / Launchpad (or Start menu) icon.
+
+1. Start the server (`npm start`) and open [http://127.0.0.1:4317](http://127.0.0.1:4317).
+2. In Chrome: **⋮ → Install page as app…** (or **Cast, save, and share →
+   Install page as app…** / **Create shortcut… → Open as window**).
+3. Confirm the install. The installed app is named **AI Usage** (full name
+   **AI Usage Dashboard**), uses the stacked-bars icon, and opens in a
+   chrome-less standalone window.
+
+There is no service worker and no offline mode — the local server must still
+be running. This is for a dedicated window, not a packaged desktop app.
+
 To open the dashboard from another device on your LAN (phone, another laptop):
 
 ```bash
