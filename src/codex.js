@@ -3,10 +3,21 @@
 // Primary, no-network source: the per-turn rate-limit snapshot Codex persists to
 //   ~/.codex/sessions/YYYY/MM/DD/rollout-<ts>-<uuid>.jsonl
 // Each turn writes an event_msg with payload.type === "token_count", whose payload
-// carries both info.total_token_usage and a `rate_limits` object:
+// carries both info.total_token_usage and a `rate_limits` object with `primary` /
+// `secondary` windows (used_percent, resets_at as unix epoch seconds, and
+// window_minutes). Historically:
 //   primary   -> 5-hour window  (window_minutes 300)
 //   secondary -> weekly window  (window_minutes 10080)
-// each with used_percent and resets_at (unix epoch seconds).
+// Recent Codex builds sometimes put the weekly window in `primary` with
+// `secondary: null` — classify by window_minutes, not slot name.
+//
+// As of ~2026-07-12 OpenAI temporarily removed the 5-hour usage limit for some
+// plans; newest snapshots may be weekly-only (primary.window_minutes 10080,
+// secondary null). Do NOT backfill a missing fiveHour from an older same-day
+// snapshot that still had window_minutes 300 — that stale 100% is misleading.
+// Walk newest→oldest until the first non-null rate_limits object, then take
+// only the windows present there. When 5h returns in a recent payload, it
+// shows again via window_minutes classification.
 //
 // We deliberately do NOT call the live chatgpt.com/backend-api endpoint or refresh
 // the OAuth token: refreshing independently races Codex's own refresh-token rotation
@@ -21,9 +32,9 @@ import { readJsonlLines, listFilesRecursive, safeStat } from './util.js';
 const CODEX_DIR = process.env.CODEX_HOME || path.join(os.homedir(), '.codex');
 const SESSIONS_DIR = path.join(CODEX_DIR, 'sessions');
 
-// How far back to scan rollout files when hunting for the freshest rate-limit
-// snapshot. Recent Codex builds sometimes write `rate_limits: null`, so we may
-// need to walk back through several recent files.
+// How far back to scan rollout files for the newest non-null rate_limits.
+// Recent Codex builds sometimes write `rate_limits: null`, so we may need to
+// walk back through several recent files/events before finding a usable blob.
 const LOOKBACK_DAYS = 14;
 
 function normalizeWindow(win) {
@@ -44,8 +55,8 @@ function normalizeWindow(win) {
   };
 }
 
-// Return the newest rollout files first, limited to the lookback window, so we can
-// stop as soon as we find a non-null rate-limit snapshot.
+// Return the newest rollout files first, limited to the lookback window, so we
+// can stop at the first non-null rate_limits object.
 async function recentRolloutFiles() {
   let files;
   try {
@@ -63,6 +74,25 @@ async function recentRolloutFiles() {
   return withStat.map((x) => x.f);
 }
 
+// Map primary/secondary slots into fiveHour / weekly using window_minutes when
+// present. Slot names alone are unreliable after Codex started writing weekly
+// (10080) into `primary` with `secondary: null`.
+function classifyWindows(primary, secondary) {
+  const byMinutes = (mins) =>
+    [primary, secondary].find((w) => w && w.windowMinutes === mins) || null;
+  let fiveHour = byMinutes(300);
+  let weekly = byMinutes(10080);
+
+  if (!fiveHour && !weekly) {
+    // No recognizable window_minutes — fall back to historical slot mapping.
+    return { fiveHour: primary, weekly: secondary };
+  }
+  // Don't reassign a window already classified by minutes into the wrong label.
+  if (!fiveHour && primary && primary.windowMinutes !== 10080) fiveHour = primary;
+  if (!weekly && secondary && secondary.windowMinutes !== 300) weekly = secondary;
+  return { fiveHour, weekly };
+}
+
 function extractRateLimits(obj) {
   // token_count events may appear as {type:'event_msg', payload:{type:'token_count', rate_limits, info}}
   const payload = obj?.payload && typeof obj.payload === 'object' ? obj.payload : obj;
@@ -72,30 +102,40 @@ function extractRateLimits(obj) {
   const primary = normalizeWindow(rl.primary);
   const secondary = normalizeWindow(rl.secondary);
   if (!primary && !secondary) return null;
+  const { fiveHour, weekly } = classifyWindows(primary, secondary);
   return {
-    fiveHour: primary,
-    weekly: secondary,
+    fiveHour,
+    weekly,
     planType: rl.plan_type ?? null,
     capturedAt: obj?.timestamp ? Date.parse(obj.timestamp) || null : null,
   };
 }
 
-// Walk newest -> oldest lines within a file, since the latest snapshot is at the end.
-async function latestRateLimitInFile(file) {
-  const lines = await readJsonlLines(file);
-  for (let i = lines.length - 1; i >= 0; i--) {
-    const rl = extractRateLimits(lines[i]);
-    if (rl) return rl;
-  }
-  return null;
-}
-
+// Take fiveHour / weekly from the newest non-null rate_limits only (newest→
+// oldest across files and within each file). Skip `rate_limits: null` and keep
+// walking, but do NOT backfill a missing window from an older snapshot — a
+// weekly-only payload means fiveHour is absent (null), not "use yesterday's
+// 5h at 100%". When OpenAI restores the 5-hour window, a recent payload with
+// window_minutes 300 will populate fiveHour again. `capturedAt` / planType
+// come from that same newest usable snapshot.
 export async function getCodexRateLimits() {
   const files = await recentRolloutFiles();
+
   for (const f of files) {
-    const rl = await latestRateLimitInFile(f);
-    if (rl) return rl;
+    const lines = await readJsonlLines(f);
+    for (let i = lines.length - 1; i >= 0; i--) {
+      const rl = extractRateLimits(lines[i]);
+      if (!rl) continue; // rate_limits null / unparseable — try older event
+      if (!rl.fiveHour && !rl.weekly) continue;
+      return {
+        fiveHour: rl.fiveHour || null,
+        weekly: rl.weekly || null,
+        planType: rl.planType ?? null,
+        capturedAt: rl.capturedAt,
+      };
+    }
   }
+
   return null;
 }
 
