@@ -36,21 +36,34 @@ function lanIPv4Addresses() {
 const AGG_TTL_MS = 15 * 1000;
 let _aggCache = null;
 let _aggAt = 0;
+// Coalesce concurrent /api/usage builds. Without this, a slow Claude/Codex
+// JSONL scan + browser/SwiftBar polling stampedes into N parallel full walks
+// (GBs of parse work) and the process never finishes — UI stuck on Loading.
+let _aggInflight = null;
 
 async function buildUsage() {
   const now = Date.now();
   if (_aggCache && now - _aggAt < AGG_TTL_MS) return _aggCache;
+  if (_aggInflight) return _aggInflight;
 
-  const [claude, codex, cursor] = await Promise.all([
-    getClaude().catch((err) => ({ provider: 'claude', label: 'Claude', available: false, error: String(err) })),
-    getCodex().catch((err) => ({ provider: 'codex', label: 'Codex', available: false, error: String(err) })),
-    getCursor().catch((err) => ({ provider: 'cursor', label: 'Cursor', available: false, error: String(err) })),
-  ]);
+  _aggInflight = (async () => {
+    try {
+      const [claude, codex, cursor] = await Promise.all([
+        getClaude().catch((err) => ({ provider: 'claude', label: 'Claude', available: false, error: String(err) })),
+        getCodex().catch((err) => ({ provider: 'codex', label: 'Codex', available: false, error: String(err) })),
+        getCursor().catch((err) => ({ provider: 'cursor', label: 'Cursor', available: false, error: String(err) })),
+      ]);
 
-  const payload = { generatedAt: new Date().toISOString(), providers: { claude, codex, cursor } };
-  _aggCache = payload;
-  _aggAt = now;
-  return payload;
+      const payload = { generatedAt: new Date().toISOString(), providers: { claude, codex, cursor } };
+      _aggCache = payload;
+      _aggAt = Date.now();
+      return payload;
+    } finally {
+      _aggInflight = null;
+    }
+  })();
+
+  return _aggInflight;
 }
 
 const MIME = {
