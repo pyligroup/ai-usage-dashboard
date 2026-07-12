@@ -7,13 +7,8 @@ const THEME_COOKIE = 'ai_usage_theme';
 const LAYOUT_COOKIE = 'ai_usage_layout';
 const SETTINGS_MAX_AGE_SEC = 60 * 60 * 24 * 365; // 1 year
 const THEME_OPTIONS = ['system', 'light', 'dark'];
-// "fit" kept as an alias for anyone who saved the first Settings label.
-const LAYOUT_OPTIONS = ['default', 'dashboard'];
-
-function normalizeLayout(raw) {
-  if (raw === 'fit' || raw === 'dashboard') return 'dashboard';
-  return LAYOUT_OPTIONS.includes(raw) ? raw : 'default';
-}
+// Legacy layout cookie values from older builds → compact bars-only.
+const LEGACY_COMPACT_LAYOUTS = new Set(['dashboard', 'fit', 'compact']);
 
 const PROVIDER_META = {
   claude: { name: 'Claude', logo: 'C', accent: 'var(--claude)', sub: 'Anthropic · Claude Code' },
@@ -21,7 +16,7 @@ const PROVIDER_META = {
   cursor: { name: 'Cursor', logo: 'Cu', accent: 'var(--cursor)', sub: 'Anysphere · Cursor IDE' },
 };
 
-// ---------- cookie-backed tool visibility ----------
+// ---------- cookie helpers ----------
 function readCookie(name) {
   const prefix = name + '=';
   for (const part of document.cookie.split(';')) {
@@ -91,22 +86,32 @@ function saveTheme(theme) {
 
 let currentTheme = applyTheme(loadTheme());
 
-// ---------- cookie-backed layout (default | dashboard) ----------
+// ---------- cookie-backed layout (default | compact) ----------
+function normalizeLayout(raw) {
+  if (raw === 'default') return 'default';
+  if (LEGACY_COMPACT_LAYOUTS.has(raw)) return 'compact';
+  return 'default';
+}
+
 function loadLayout() {
   return normalizeLayout(readCookie(LAYOUT_COOKIE));
 }
 
 function applyLayout(layout) {
-  const l = normalizeLayout(layout);
-  if (l === 'default') document.documentElement.removeAttribute('data-layout');
-  else document.documentElement.setAttribute('data-layout', l);
-  return l;
+  const L = normalizeLayout(layout);
+  if (L === 'compact') document.documentElement.setAttribute('data-layout', 'compact');
+  else document.documentElement.removeAttribute('data-layout');
+  return L;
 }
 
 function saveLayout(layout) {
-  const l = applyLayout(layout);
-  writeCookie(LAYOUT_COOKIE, l, SETTINGS_MAX_AGE_SEC);
-  return l;
+  const L = applyLayout(layout);
+  writeCookie(LAYOUT_COOKIE, L, SETTINGS_MAX_AGE_SEC);
+  return L;
+}
+
+function isCompactLayout() {
+  return currentLayout === 'compact';
 }
 
 let currentLayout = applyLayout(loadLayout());
@@ -177,150 +182,26 @@ function el(tag, attrs = {}, children = []) {
   return e;
 }
 
-// ---------- summary strip ----------
-// Each provider's rate-limit % has a different provenance. Say so plainly.
-// Claude/Cursor live values are throttled ~180s server-side — use fetchedAt so
-// we don't claim "just now" when the number is a few minutes old.
-function limitSourceText(provider, rateLimits) {
-  if (provider === 'claude') {
-    if (rateLimits?.stale) return 'live fetch (using last good value)';
-    const age = rateLimits?.fetchedAt ? fmtAge(rateLimits.fetchedAt) : null;
-    return age ? `live from Anthropic · ${age}` : 'live from Anthropic';
-  }
-  if (provider === 'cursor') {
-    if (rateLimits?.stale) return 'live fetch (using last good value)';
-    const age = rateLimits?.fetchedAt ? fmtAge(rateLimits.fetchedAt) : null;
-    return age ? `live from Cursor · ${age}` : 'live from Cursor';
-  }
-  // codex — from the on-disk snapshot Codex last wrote
-  const age = fmtAge(rateLimits?.capturedAt);
-  return `snapshot Codex saved ${age}`;
+// Dollars from a major-unit number (Claude extraUsage) or USD cents (Cursor).
+function fmtSpendPair(used, limit, { cents = false } = {}) {
+  if (used == null && limit == null) return '';
+  const scale = cents ? 0.01 : 1;
+  const u = used == null ? null : used * scale;
+  const l = limit == null ? null : limit * scale;
+  if (u != null && l != null) return `${fmtMoney(u)} of ${fmtMoney(l)}`;
+  if (u != null) return `${fmtMoney(u)} used`;
+  return `${fmtMoney(l)} limit`;
 }
 
-function summaryTile({ provider, label, pct, resetsAt, sourceText, missing, valueHint }) {
-  const meta = PROVIDER_META[provider];
-  const color = severityColor(pct);
-  const tile = el('div', { class: 'tile', style: `--accent:${meta.accent}` });
-
-  // Compact meter: identity + % on one row, bar, then reset · provenance.
-  const top = el('div', { class: 'tile-top' }, [
-    el('div', { class: 'tile-id' }, [
-      el('span', { class: 'tile-badge' }, meta.name),
-      el('span', { class: 'tile-label' }, label),
-    ]),
-  ]);
-
-  if (missing) {
-    top.append(el('div', { class: 'tile-value missing' }, '—'));
-    tile.append(top);
-    tile.append(el('div', { class: 'tile-bar empty' }));
-    tile.append(el('div', { class: 'tile-meta' }, 'no live data'));
-    return tile;
-  }
-
-  top.append(
-    el('div', { class: 'tile-value', style: `color:${color}` }, [
-      String(Math.round(pct)),
-      el('span', { class: 'pct' }, '%'),
-    ]),
-  );
-  tile.append(top);
-
-  const bar = el('div', { class: 'tile-bar' });
-  bar.append(el('span', { style: `width:${Math.min(100, pct)}%;background:${color}` }));
-  tile.append(bar);
-
-  const reset = valueHint || fmtReset(resetsAt);
-  const metaParts = [reset, sourceText].filter(Boolean);
-  tile.append(el('div', { class: 'tile-meta' }, metaParts.join(' · ') || ' '));
-  return tile;
-}
-
-function renderSummaryLegend(keys) {
-  const legend = document.getElementById('summary-legend');
-  if (!legend) return;
+// Claude usage-credits meter caption: configured pool + remaining.
+// e.g. "$11.38 of $20.00 · $8.62 left"
+function fmtCreditsHint(eu) {
+  if (!eu) return '';
   const parts = [];
-  if (keys.includes('claude')) {
-    parts.push(
-      '<span class="lg lg-claude">Claude %</span> is fetched <strong>live</strong> from Anthropic',
-    );
-  }
-  if (keys.includes('codex')) {
-    parts.push(
-      '<span class="lg lg-codex">Codex %</span> is read from Codex’s <strong>last on-disk snapshot</strong> (updates only when you run Codex)',
-    );
-  }
-  if (keys.includes('cursor')) {
-    parts.push(
-      '<span class="lg lg-cursor">Cursor %</span> is fetched <strong>live</strong> from Cursor (billing-cycle plan, not a 5-hour window)',
-    );
-  }
-  legend.innerHTML = parts.length ? parts.join(' · ') : 'No tools selected — open Settings to choose.';
-}
-
-function appendProviderSummaryTiles(grid, key, p) {
-  const rl = p && p.rateLimits;
-  const src = rl ? limitSourceText(key, rl) : 'no data';
-
-  if (key === 'cursor') {
-    // Cursor meters a billing-cycle plan allowance — never label these as 5-hour/weekly.
-    // Headline % is totalPercentUsed (matches Spending "Total Usage" / cutoff).
-    const plan = rl?.plan;
-    grid.append(
-      summaryTile({
-        provider: key,
-        label: 'plan (billing cycle)',
-        pct: plan?.usedPercent,
-        resetsAt: plan?.resetsAt,
-        sourceText: src,
-        missing: !plan,
-      }),
-    );
-    grid.append(
-      summaryTile({
-        provider: key,
-        label: 'auto models',
-        pct: rl?.auto?.usedPercent,
-        resetsAt: rl?.auto?.resetsAt,
-        sourceText: src,
-        missing: !rl?.auto,
-      }),
-    );
-    return;
-  }
-
-  grid.append(
-    summaryTile({
-      provider: key,
-      label: '5-hour limit',
-      pct: rl?.fiveHour?.usedPercent,
-      resetsAt: rl?.fiveHour?.resetsAt,
-      sourceText: src,
-      missing: !rl?.fiveHour,
-    }),
-  );
-  grid.append(
-    summaryTile({
-      provider: key,
-      label: 'weekly limit',
-      pct: rl?.weekly?.usedPercent,
-      resetsAt: rl?.weekly?.resetsAt,
-      sourceText: src,
-      missing: !rl?.weekly,
-    }),
-  );
-}
-
-function renderSummary(providers) {
-  const grid = document.getElementById('summary-grid');
-  grid.innerHTML = '';
-  const keys = visibleKeys();
-  // Two tiles per provider; drives even column counts in CSS (avoids a lone wrap).
-  grid.dataset.count = String(keys.length * 2);
-  renderSummaryLegend(keys);
-  for (const key of keys) {
-    appendProviderSummaryTiles(grid, key, providers[key]);
-  }
+  const pair = fmtSpendPair(eu.used, eu.limit);
+  if (pair) parts.push(pair);
+  if (eu.remaining != null) parts.push(`${fmtMoney(eu.remaining)} left`);
+  return parts.join(' · ');
 }
 
 // ---------- sparkline ----------
@@ -360,7 +241,7 @@ function sparkline(dailyMap, accent) {
 }
 
 // ---------- provider card ----------
-function limitRow(name, win, sourceText) {
+function limitRow(name, win, sourceText, valueHint) {
   if (!win) {
     return el('div', { class: 'limit-row' }, [
       el('div', { class: 'limit-top' }, [
@@ -373,16 +254,23 @@ function limitRow(name, win, sourceText) {
   }
   const pct = win.usedPercent;
   const color = severityColor(pct);
+  const pctLabel =
+    pct == null
+      ? el('span', { class: 'limit-pct', style: 'color:var(--text-faint)' }, '—')
+      : el('span', { class: 'limit-pct', style: `color:${color}` }, `${Math.round(pct)}%`);
+  const metaParts = [valueHint, fmtReset(win.resetsAt)].filter(Boolean);
   return el('div', { class: 'limit-row' }, [
     el('div', { class: 'limit-top' }, [
       el('span', { class: 'limit-name' }, name),
-      el('span', { class: 'limit-pct', style: `color:${color}` }, `${Math.round(pct)}%`),
+      pctLabel,
     ]),
     el('div', { class: 'bar' }, [
-      el('span', { style: `width:${Math.min(100, pct)}%;background:${color}` }),
+      el('span', {
+        style: `width:${pct == null ? 0 : Math.min(100, pct)}%;background:${color}`,
+      }),
     ]),
     el('div', { class: 'limit-reset' }, [
-      fmtReset(win.resetsAt) || ' ',
+      metaParts.join(' · ') || ' ',
       sourceText ? el('span', { class: 'limit-src' }, ` · ${sourceText}`) : null,
     ]),
   ]);
@@ -398,76 +286,38 @@ function stat(label, value, caption, opts = {}) {
   ]);
 }
 
-function providerCard(key, p) {
-  const meta = PROVIDER_META[key];
-  const card = el('div', { class: 'card', style: `--accent:${meta.accent}` });
+const STACK_MQ = window.matchMedia('(max-width: 1024px)');
+// Keep in sync with --stack-bp / @media (max-width: 1024px) in styles.css.
+// ≤1024: 1-col + token accordion; ≥1025: multi-col full detail.
 
+function isStackedViewport() {
+  return STACK_MQ.matches;
+}
+
+// Keep accordion state in sync with the stack breakpoint:
+// wide → always open (full detail); narrow → collapsed by default.
+function syncCardExtrasOpen() {
+  const stacked = isStackedViewport();
+  for (const d of document.querySelectorAll('details.card-extra')) {
+    d.open = !stacked;
+  }
+}
+
+STACK_MQ.addEventListener('change', syncCardExtrasOpen);
+
+function buildLimitsPanel(key, p, { compact = false } = {}) {
   const rl = p?.rateLimits;
   const isClaude = key === 'claude';
   const isCursor = key === 'cursor';
   const isCodex = key === 'codex';
   const hasLimits = !!rl;
 
-  // Header chip is honest about provenance:
-  //  Claude/Cursor -> "live"
-  //  Codex         -> "snapshot Xm ago"
-  let chipText, chipCls, chipTip;
-  if (!hasLimits) {
-    chipText = 'tokens only';
-    chipCls = 'chip fallback';
-    chipTip = 'Live rate-limit % unavailable — showing local/token totals only.';
-  } else if (isClaude) {
-    chipText = rl.stale ? 'live (cached)' : 'live';
-    chipCls = 'chip live';
-    chipTip = 'Fetched live from Anthropic (api.anthropic.com/api/oauth/usage), refreshed every few minutes.';
-  } else if (isCursor) {
-    chipText = rl.stale ? 'live (cached)' : 'live';
-    chipCls = 'chip live';
-    chipTip =
-      'Fetched live from Cursor (cursor.com/api/usage-summary). Plan % matches Spending "Total Usage" (billing-cycle cutoff), not a 5-hour window.';
-  } else {
-    chipText = `snapshot · ${fmtAge(rl.capturedAt)}`;
-    chipCls = 'chip snapshot';
-    chipTip =
-      'Read from the snapshot Codex wrote to disk on its last run. Not fetched live — it only updates when you use Codex.';
-  }
-
-  let subText;
-  if (isClaude) {
-    subText = [p?.subscriptionType ? p.subscriptionType.toUpperCase() : null, meta.sub].filter(Boolean).join(' · ');
-  } else if (isCursor) {
-    subText = [p?.membershipType ? p.membershipType.toUpperCase() : null, meta.sub].filter(Boolean).join(' · ');
-  } else {
-    subText = [p?.planType ? p.planType.toUpperCase() : null, meta.sub].filter(Boolean).join(' · ');
-  }
-
-  card.append(
-    el('div', { class: 'card-head' }, [
-      el('div', { class: 'card-logo', style: `background:${meta.accent}` }, meta.logo),
-      el('div', {}, [
-        el('div', { class: 'card-title' }, meta.name),
-        el('div', { class: 'card-sub' }, subText),
-      ]),
-      el('span', { class: chipCls, title: chipTip }, chipText),
-    ]),
-  );
-
-  const body = el('div', { class: 'card-body' });
-
-  if (!p || !p.available) {
-    body.append(el('div', { class: 'unavailable' }, `No ${meta.name} data found on this machine.`));
-    card.append(body);
-    return card;
-  }
-
-  // Two panels so compact layout can place limits | tokens side-by-side.
   const limitsPanel = el('div', { class: 'card-panel card-limits' });
-  const tokensPanel = el('div', { class: 'card-panel card-tokens' });
-
-  // ----- Rate limits (with per-provider provenance line) -----
-  limitsPanel.append(
-    el('div', { class: 'section-label' }, isCursor ? 'Subscription plan usage' : 'Subscription rate limits'),
-  );
+  if (!compact) {
+    limitsPanel.append(
+      el('div', { class: 'section-label' }, isCursor ? 'Subscription plan usage' : 'Subscription rate limits'),
+    );
+  }
 
   if (isCursor) {
     const limitSrc = hasLimits ? (rl.stale ? 'live (cached)' : 'live') : null;
@@ -475,6 +325,17 @@ function providerCard(key, p) {
     limitsPanel.append(limitRow('Plan (billing cycle)', plan, limitSrc));
     limitsPanel.append(limitRow('Auto models', rl?.auto, limitSrc));
     limitsPanel.append(limitRow('API / named models', rl?.api, limitSrc));
+    const od = rl?.onDemand;
+    if (od?.enabled) {
+      limitsPanel.append(
+        limitRow(
+          'On-demand credits',
+          od,
+          limitSrc,
+          fmtSpendPair(od.used, od.limit, { cents: true }) || 'billing cycle',
+        ),
+      );
+    }
     if (!hasLimits) {
       const why =
         p.liveError === 'no-credential'
@@ -495,6 +356,47 @@ function providerCard(key, p) {
     limitsPanel.append(limitRow('5-hour window', rl?.fiveHour, limitSrc));
     limitsPanel.append(limitRow('Weekly window', rl?.weekly, limitSrc));
     if (rl?.opusWeekly) limitsPanel.append(limitRow('Weekly (Opus)', rl.opusWeekly, limitSrc));
+    // Dynamic scoped windows from Anthropic limits[] (labels from API).
+    if (isClaude && Array.isArray(rl?.scoped)) {
+      for (const sc of rl.scoped) {
+        if (!sc) continue;
+        limitsPanel.append(
+          limitRow(sc.label || 'Scoped limit', sc, limitSrc),
+        );
+      }
+    }
+    if (isClaude && rl?.extraUsage) {
+      const eu = rl.extraUsage;
+      if (eu.enabled) {
+        // Progress bar only while extra usage is on — caption shows $ used/limit/left.
+        limitsPanel.append(
+          limitRow(
+            'Usage credits',
+            eu,
+            limitSrc,
+            fmtCreditsHint(eu) || 'monthly extra usage',
+          ),
+        );
+        if (!compact) {
+          limitsPanel.append(
+            el(
+              'div',
+              { class: 'note' },
+              'Usage credits are a monthly spend cap for extra usage after you hit plan rate limits — not the 5-hour / weekly windows.',
+            ),
+          );
+        }
+      } else if (eu.balance != null && !compact) {
+        // Extra usage off: no % bar. Still show a real balance when Anthropic returns one.
+        limitsPanel.append(
+          el(
+            'div',
+            { class: 'note' },
+            `Usage credit balance: ${fmtMoney(eu.balance)} (extra usage off — not a rate-limit window).`,
+          ),
+        );
+      }
+    }
 
     if (!hasLimits) {
       const why =
@@ -504,7 +406,7 @@ function providerCard(key, p) {
             ? `Live limits unavailable (${p.liveError}) — showing local token totals.`
             : 'Live rate-limit % unavailable — showing local token totals.';
       limitsPanel.append(el('div', { class: 'note' }, why));
-    } else if (isCodex) {
+    } else if (isCodex && !compact) {
       limitsPanel.append(
         el(
           'div',
@@ -515,7 +417,14 @@ function providerCard(key, p) {
     }
   }
 
-  // ----- Token usage -----
+  return limitsPanel;
+}
+
+function buildTokensPanel(key, p) {
+  const isClaude = key === 'claude';
+  const isCursor = key === 'cursor';
+  const tokensPanel = el('div', { class: 'card-panel card-tokens' });
+
   const tokenSrcLabel = isCursor ? 'from Cursor dashboard API' : 'counted from local logs';
   const tokenWindowLabel = isCursor
     ? p.tokens?.windowLabel || 'current period'
@@ -592,8 +501,16 @@ function providerCard(key, p) {
     tokensPanel.append(stats);
   }
 
-  // Daily / session sparkline + by-model — full-width card footer in compact layout.
+  return tokensPanel;
+}
+
+function buildTrendPanel(key, p, accent) {
+  const isClaude = key === 'claude';
+  const isCursor = key === 'cursor';
+  const isCodex = key === 'codex';
+  const t = p.tokens || {};
   const trend = el('div', { class: 'card-trend' });
+
   if (t.daily && Object.keys(t.daily).length) {
     trend.append(
       el('div', { class: 'section-label' }, [
@@ -601,7 +518,7 @@ function providerCard(key, p) {
         el('span', { class: 'section-src' }, 'per day, 30 days'),
       ]),
     );
-    trend.append(sparkline(t.daily, meta.accent));
+    trend.append(sparkline(t.daily, accent));
   } else if (isCursor) {
     trend.append(
       el('div', { class: 'note' }, 'Per-day sparkline isn’t shown for Cursor — the aggregated endpoint returns totals by model, not by day.'),
@@ -632,7 +549,7 @@ function providerCard(key, p) {
       const short = model.replace(/^claude-/, '').replace(/-\d{8}$/, '');
       models.append(
         el('div', { class: 'model-row' }, [
-          el('span', { class: 'model-name' }, short),
+          el('span', { class: 'model-name', title: model }, short),
           el('span', { class: 'model-val' }, fmtCompact(tot)),
           el('div', { class: 'model-track' }, [el('span', { style: `width:${(tot / max) * 100}%` })]),
         ]),
@@ -645,66 +562,194 @@ function providerCard(key, p) {
     );
   }
 
-  body.append(limitsPanel);
-  body.append(el('div', { class: 'divider' }));
-  body.append(tokensPanel);
-  if (trend.childNodes.length) body.append(trend);
+  return trend.childNodes.length ? trend : null;
+}
+
+function providerCard(key, p, { extraOpen } = {}) {
+  const meta = PROVIDER_META[key];
+  const compact = isCompactLayout();
+  const card = el('div', {
+    class: compact ? 'card card-compact' : 'card',
+    style: `--accent:${meta.accent}`,
+    'data-provider': key,
+  });
+
+  const rl = p?.rateLimits;
+  const isClaude = key === 'claude';
+  const isCursor = key === 'cursor';
+  const hasLimits = !!rl;
+
+  // Header chip is honest about provenance:
+  //  Claude/Cursor -> "live"
+  //  Codex         -> "snapshot Xm ago"
+  let chipText, chipCls, chipTip;
+  if (!hasLimits) {
+    chipText = 'tokens only';
+    chipCls = 'chip fallback';
+    chipTip = 'Live rate-limit % unavailable — showing local/token totals only.';
+  } else if (isClaude) {
+    chipText = rl.stale ? 'live (cached)' : 'live';
+    chipCls = 'chip live';
+    chipTip = 'Fetched live from Anthropic (api.anthropic.com/api/oauth/usage), refreshed every few minutes.';
+  } else if (isCursor) {
+    chipText = rl.stale ? 'live (cached)' : 'live';
+    chipCls = 'chip live';
+    chipTip =
+      'Fetched live from Cursor (cursor.com/api/usage-summary). Plan % matches Spending "Total Usage" (billing-cycle cutoff), not a 5-hour window.';
+  } else {
+    chipText = `snapshot · ${fmtAge(rl.capturedAt)}`;
+    chipCls = 'chip snapshot';
+    chipTip =
+      'Read from the snapshot Codex wrote to disk on its last run. Not fetched live — it only updates when you use Codex.';
+  }
+
+  let subText;
+  if (isClaude) {
+    subText = [p?.subscriptionType ? p.subscriptionType.toUpperCase() : null, meta.sub].filter(Boolean).join(' · ');
+  } else if (isCursor) {
+    subText = [p?.membershipType ? p.membershipType.toUpperCase() : null, meta.sub].filter(Boolean).join(' · ');
+  } else {
+    subText = [p?.planType ? p.planType.toUpperCase() : null, meta.sub].filter(Boolean).join(' · ');
+  }
+
+  card.append(
+    el('div', { class: 'card-head' }, [
+      el('div', { class: 'card-logo', style: `background:${meta.accent}` }, meta.logo),
+      el('div', {}, [
+        el('div', { class: 'card-title' }, meta.name),
+        el('div', { class: 'card-sub' }, subText),
+      ]),
+      el('span', { class: chipCls, title: chipTip }, chipText),
+    ]),
+  );
+
+  const body = el('div', { class: 'card-body' });
+
+  if (!p || !p.available) {
+    body.append(el('div', { class: 'unavailable' }, `No ${meta.name} data found on this machine.`));
+    card.append(body);
+    return card;
+  }
+
+  // Limits always live on the card (no separate summary strip).
+  body.append(buildLimitsPanel(key, p, { compact }));
+
+  // Compact: bars-only glanceable overview — no tokens / sparklines / accordion.
+  if (compact) {
+    card.append(body);
+    return card;
+  }
+
+  const tokensPanel = buildTokensPanel(key, p);
+  const trend = buildTrendPanel(key, p, meta.accent);
+
+  // Tokens sit inside <details> (accordion on narrow). Trend is a sibling of
+  // details so it is a real .card-body grid item — Chromium ignores
+  // grid-column when the element is nested under display:contents on
+  // <details>, which trapped the footer in the tokens column on wide cards.
+  // Narrow CSS hides .card-trend when the accordion is closed.
+  // Preserve user-expanded accordion across 30s refreshes when stacked.
+  const extra = el('details', { class: 'card-extra' });
+  const wantOpen = isStackedViewport() ? !!extraOpen : true;
+  if (wantOpen) extra.setAttribute('open', '');
+  extra.append(
+    el('summary', { class: 'card-extra-summary' }, 'Token usage & more'),
+  );
+  const extraBody = el('div', { class: 'card-extra-body' });
+  extraBody.append(tokensPanel);
+  extra.append(extraBody);
+  body.append(extra);
+  if (trend) body.append(trend);
+
   card.append(body);
   return card;
 }
 
 // ---------- skeletons (shown before first data arrives) ----------
-function skeletonTile() {
-  return el('div', { class: 'tile skeleton-tile' }, [
-    el('div', { class: 'tile-top' }, [
-      el('div', { class: 'tile-id' }, [
-        el('span', { class: 'sk sk-badge' }),
-        el('span', { class: 'sk sk-label' }),
-      ]),
-      el('span', { class: 'sk sk-value' }),
-    ]),
-    el('div', { class: 'tile-bar' }, [el('span', { class: 'sk-bar' })]),
-    el('span', { class: 'sk sk-meta' }),
-  ]);
-}
-
 function skeletonCard() {
-  const body = el('div', { class: 'card-body' }, [
-    el('span', { class: 'sk sk-line', style: 'width:40%' }),
+  const compact = isCompactLayout();
+  const limits = el('div', { class: 'card-panel card-limits' }, [
+    el('span', { class: 'sk sk-line', style: 'width:42%' }),
     el('div', { class: 'sk sk-bar-lg' }),
-    el('span', { class: 'sk sk-line', style: 'width:30%' }),
+    el('span', { class: 'sk sk-line', style: 'width:34%' }),
     el('div', { class: 'sk sk-bar-lg' }),
-    el('div', { class: 'divider' }),
-    el('div', { class: 'stats' }, [
-      0, 1, 2, 3,
-    ].map(() =>
-      el('div', { class: 'stat' }, [
-        el('span', { class: 'sk sk-line', style: 'width:55%' }),
-        el('span', { class: 'sk sk-num' }),
-      ]),
-    )),
   ]);
+
+  if (compact) {
+    return el('div', { class: 'card card-compact skeleton' }, [
+      el('div', { class: 'card-head' }, [
+        el('div', { class: 'sk sk-logo' }),
+        el('div', { style: 'flex:1;min-width:0' }, [
+          el('div', { class: 'sk sk-line', style: 'width:35%;margin-bottom:6px' }),
+          el('div', { class: 'sk sk-line', style: 'width:55%' }),
+        ]),
+      ]),
+      el('div', { class: 'card-body' }, [limits]),
+    ]);
+  }
+
+  const stats = el('div', { class: 'stats' }, [
+    0, 1, 2, 3,
+  ].map(() =>
+    el('div', { class: 'stat' }, [
+      el('span', { class: 'sk sk-line', style: 'width:55%' }),
+      el('span', { class: 'sk sk-num' }),
+    ]),
+  ));
+
+  const tokens = el('div', { class: 'card-panel card-tokens' }, [
+    el('div', { class: 'section-label' }, [
+      el('span', { class: 'sk sk-line', style: 'width:48%' }),
+    ]),
+    stats,
+  ]);
+
+  const trend = el('div', { class: 'card-trend' }, [
+    el('div', { class: 'section-label' }, [
+      el('span', { class: 'sk sk-line', style: 'width:40%' }),
+    ]),
+    el('div', { class: 'sk sk-spark' }),
+  ]);
+
+  // Mirror live cards: tokens in .card-extra, trend as .card-body sibling
+  // so wide layouts can span the footer across both columns.
+  const extra = el('details', { class: 'card-extra' });
+  if (!isStackedViewport()) extra.setAttribute('open', '');
+  extra.append(el('summary', { class: 'card-extra-summary' }, 'Token usage & more'));
+  extra.append(el('div', { class: 'card-extra-body' }, [tokens]));
+
   return el('div', { class: 'card skeleton' }, [
     el('div', { class: 'card-head' }, [
       el('div', { class: 'sk sk-logo' }),
-      el('div', { style: 'flex:1' }, [
+      el('div', { style: 'flex:1;min-width:0' }, [
         el('div', { class: 'sk sk-line', style: 'width:35%;margin-bottom:6px' }),
         el('div', { class: 'sk sk-line', style: 'width:55%' }),
       ]),
     ]),
-    body,
+    el('div', { class: 'card-body' }, [limits, extra, trend]),
   ]);
 }
 
 function renderSkeletons() {
-  const grid = document.getElementById('summary-grid');
-  grid.innerHTML = '';
-  const n = Math.max(2, visibleKeys().length * 2);
-  grid.dataset.count = String(n);
-  for (let i = 0; i < n; i++) grid.append(skeletonTile());
   const container = document.getElementById('providers');
   container.innerHTML = '';
   for (const _ of visibleKeys()) container.append(skeletonCard());
+}
+
+function renderProviders(providers) {
+  const container = document.getElementById('providers');
+  // Remember which narrow-view accordions the user expanded so a 30s refresh
+  // doesn't slam them shut.
+  const openExtras = {};
+  for (const card of container.querySelectorAll('.card[data-provider]')) {
+    const key = card.getAttribute('data-provider');
+    const details = card.querySelector('details.card-extra');
+    if (key && details) openExtras[key] = details.open;
+  }
+  container.innerHTML = '';
+  for (const key of visibleKeys()) {
+    container.append(providerCard(key, providers[key], { extraOpen: openExtras[key] }));
+  }
 }
 
 // ---------- settings modal ----------
@@ -715,13 +760,13 @@ function openSettings() {
   const form = document.getElementById('settings-form');
   const hint = document.getElementById('settings-hint');
   const themeSelect = document.getElementById('theme-select');
-  const layoutFit = document.getElementById('layout-fit');
+  const compactCheck = document.getElementById('compact-check');
   if (!modal || !form) return;
   for (const input of form.querySelectorAll('input[name="tool"]')) {
     input.checked = !!visibleTools[input.value];
   }
   if (themeSelect) themeSelect.value = currentTheme;
-  if (layoutFit) layoutFit.checked = currentLayout === 'dashboard';
+  if (compactCheck) compactCheck.checked = currentLayout === 'compact';
   if (hint) hint.hidden = true;
   modal.hidden = false;
   document.body.classList.add('modal-open');
@@ -769,17 +814,12 @@ function initSettings() {
     const nextTheme = themeSelect ? themeSelect.value : 'system';
     currentTheme = saveTheme(nextTheme);
 
-    const layoutFit = document.getElementById('layout-fit');
-    currentLayout = saveLayout(layoutFit && layoutFit.checked ? 'dashboard' : 'default');
+    const compactCheck = document.getElementById('compact-check');
+    currentLayout = saveLayout(compactCheck && compactCheck.checked ? 'compact' : 'default');
 
     closeSettings();
     if (lastProviders) {
-      renderSummary(lastProviders);
-      const container = document.getElementById('providers');
-      container.innerHTML = '';
-      for (const key of visibleKeys()) {
-        container.append(providerCard(key, lastProviders[key]));
-      }
+      renderProviders(lastProviders);
     } else {
       renderSkeletons();
     }
@@ -800,8 +840,6 @@ function tickCountdown() {
 }
 
 // ---------- fetch + render loop ----------
-let hasRenderedData = false;
-
 async function refresh() {
   const dot = document.getElementById('status-dot');
   const updated = document.getElementById('updated');
@@ -815,14 +853,7 @@ async function refresh() {
     const providers = data.providers || {};
     lastProviders = providers;
 
-    renderSummary(providers);
-
-    const container = document.getElementById('providers');
-    container.innerHTML = '';
-    for (const key of visibleKeys()) {
-      container.append(providerCard(key, providers[key]));
-    }
-    hasRenderedData = true;
+    renderProviders(providers);
 
     const anyLive = visibleKeys().some((k) => providers[k]?.rateLimits);
     dot.className = anyLive ? 'dot live' : 'dot';
