@@ -8,7 +8,10 @@
 //                 User-Agent: claude-code/<version>   (a real UA is REQUIRED; a
 //                 missing/fake one lands you in an aggressively 429'd bucket)
 //      Returns five_hour.utilization, seven_day.utilization (+ resets_at each),
-//      and a limits[] array. Undocumented + version-fragile -> allowed to fail.
+//      optional seven_day_opus, spend / extra_usage (monthly usage-credit cap),
+//      and limits[] (session / weekly_all mirrors + optional weekly_scoped /
+//      model-scoped windows — normalized as rateLimits.scoped). Undocumented +
+//      version-fragile -> allowed to fail.
 //   2. STABLE local token totals summed from ~/.claude/projects/**/<session>.jsonl
 //      assistant-message `message.usage` blocks. Always available, no network.
 //
@@ -108,6 +111,209 @@ function pickWindow(win) {
   return { usedPercent, resetsAt };
 }
 
+// Convert { amount_minor, exponent } (or credit-count + decimal_places) to a
+// major-unit number (e.g. USD dollars). Returns null if shape is unknown.
+function moneyFromMinor(obj, fallbackExponent = 2) {
+  if (!obj || typeof obj !== 'object') return null;
+  if (typeof obj.amount_minor !== 'number') return null;
+  const exp =
+    typeof obj.exponent === 'number'
+      ? obj.exponent
+      : typeof obj.decimal_places === 'number'
+        ? obj.decimal_places
+        : fallbackExponent;
+  return obj.amount_minor / Math.pow(10, exp);
+}
+
+// Monthly usage credits / extra-usage spend cap. These are NOT the 5-hour or
+// weekly subscription windows — Anthropic's disclaimer: "Usage credits cover
+// you when you hit your plan limits." Prefer `spend` (has percent + money),
+// fall back to `extra_usage` (used_credits / monthly_limit).
+//
+// When extra usage is disabled (`spend.enabled` / `extra_usage.is_enabled`
+// false): do NOT expose a % meter. Still surface `spend.balance` when the API
+// returns a real money object (same amount_minor/exponent shape as used/limit).
+function pickExtraUsage(spend, extra) {
+  const enabled =
+    (spend && typeof spend.enabled === 'boolean' ? spend.enabled : null) ??
+    (extra && typeof extra.is_enabled === 'boolean' ? extra.is_enabled : null);
+
+  let used = moneyFromMinor(spend?.used);
+  let limit = moneyFromMinor(spend?.limit);
+  // Observed null when enabled; when present, same money shape as used/limit.
+  const balance = moneyFromMinor(spend?.balance);
+  const currency =
+    spend?.used?.currency ||
+    spend?.limit?.currency ||
+    spend?.balance?.currency ||
+    (typeof extra?.currency === 'string' ? extra.currency : null) ||
+    'USD';
+  const decimals =
+    typeof spend?.used?.exponent === 'number'
+      ? spend.used.exponent
+      : typeof spend?.balance?.exponent === 'number'
+        ? spend.balance.exponent
+        : typeof extra?.decimal_places === 'number'
+          ? extra.decimal_places
+          : 2;
+
+  if (used == null && typeof extra?.used_credits === 'number') {
+    used = extra.used_credits / Math.pow(10, decimals);
+  }
+  if (limit == null && typeof extra?.monthly_limit === 'number') {
+    limit = extra.monthly_limit / Math.pow(10, decimals);
+  }
+
+  const remaining =
+    used != null && limit != null ? Math.max(0, +(limit - used).toFixed(decimals)) : null;
+
+  // Disabled: no progress bar — only a balance note when the API provides one.
+  if (enabled === false) {
+    if (balance == null) return null;
+    return {
+      enabled: false,
+      usedPercent: null,
+      used: null,
+      limit: null,
+      remaining: null,
+      balance,
+      currency,
+      resetsAt: null,
+    };
+  }
+
+  let usedPercent =
+    typeof spend?.percent === 'number'
+      ? spend.percent
+      : typeof extra?.utilization === 'number'
+        ? extra.utilization
+        : null;
+  if (usedPercent == null && used != null && limit != null && limit > 0) {
+    usedPercent = (used / limit) * 100;
+  }
+  if (usedPercent != null) usedPercent = Math.max(0, Math.min(100, usedPercent));
+
+  // Only surface when the account has a real credit pool, spend meter, or balance.
+  if (used == null && limit == null && usedPercent == null && balance == null) {
+    return null;
+  }
+
+  return {
+    enabled: enabled !== false,
+    usedPercent,
+    used,
+    limit,
+    remaining,
+    balance,
+    currency,
+    // Monthly pool — no per-window resets_at on spend/extra_usage today.
+    resetsAt: null,
+  };
+}
+
+// Kinds that mirror top-level five_hour / seven_day — skip unless they carry a
+// scope (model display_name / surface) that adds distinct info.
+const MIRROR_LIMIT_KINDS = new Set(['session', 'weekly_all']);
+
+function humanizeLimitKind(kind) {
+  if (!kind || typeof kind !== 'string') return 'Limit';
+  return kind
+    .split('_')
+    .filter(Boolean)
+    .map((w) => w.charAt(0).toUpperCase() + w.slice(1))
+    .join(' ');
+}
+
+// Label from scope.model.display_name / scope.surface, with a group hint.
+// Never hardcode product names (e.g. "Fable") — they come from the API.
+function scopedLimitLabel(entry) {
+  const scope = entry?.scope;
+  const modelName =
+    (scope?.model && typeof scope.model.display_name === 'string' && scope.model.display_name) ||
+    (typeof scope?.model === 'string' ? scope.model : null) ||
+    null;
+  const surface =
+    typeof scope?.surface === 'string' && scope.surface.trim() ? scope.surface.trim() : null;
+  const name = (modelName && modelName.trim()) || surface;
+  const group = typeof entry?.group === 'string' ? entry.group : null;
+  const kind = typeof entry?.kind === 'string' ? entry.kind : null;
+
+  if (name) {
+    if (group === 'weekly' || (kind && kind.startsWith('weekly'))) return `Weekly (${name})`;
+    if (group === 'session' || kind === 'session') return `Session (${name})`;
+    return name;
+  }
+  if (kind === 'weekly_scoped') return 'Weekly (scoped)';
+  if (kind) return humanizeLimitKind(kind);
+  if (group) return humanizeLimitKind(group);
+  return 'Scoped limit';
+}
+
+function isOpusScopedDuplicate(entry, hasOpusWeekly) {
+  if (!hasOpusWeekly) return false;
+  const name = (
+    (entry?.scope?.model && typeof entry.scope.model.display_name === 'string'
+      ? entry.scope.model.display_name
+      : '') || ''
+  ).toLowerCase();
+  if (name === 'opus' || name.includes('opus')) return true;
+  const kind = (typeof entry?.kind === 'string' ? entry.kind : '').toLowerCase();
+  return kind.includes('opus');
+}
+
+// Extra windows from limits[] beyond the primary five_hour / seven_day /
+// seven_day_opus bars. Especially weekly_scoped (e.g. model-scoped weekly %).
+function pickScopedLimits(limits, { hasOpusWeekly = false } = {}) {
+  if (!Array.isArray(limits) || !limits.length) return [];
+  const out = [];
+  for (const entry of limits) {
+    if (!entry || typeof entry !== 'object') continue;
+    if (entry.is_active === false) continue;
+
+    const kind = typeof entry.kind === 'string' ? entry.kind : null;
+    const scope = entry.scope && typeof entry.scope === 'object' ? entry.scope : null;
+    const hasScope = !!(
+      scope &&
+      ((scope.model &&
+        typeof scope.model.display_name === 'string' &&
+        scope.model.display_name.trim()) ||
+        (typeof scope.model === 'string' && scope.model.trim()) ||
+        (typeof scope.surface === 'string' && scope.surface.trim()))
+    );
+
+    // Skip plain session / weekly_all mirrors of five_hour / seven_day.
+    if (kind && MIRROR_LIMIT_KINDS.has(kind) && !hasScope) continue;
+
+    const isScopedKind = kind === 'weekly_scoped' || (kind && kind.includes('scoped'));
+    if (!isScopedKind && !hasScope) continue;
+    if (isOpusScopedDuplicate(entry, hasOpusWeekly)) continue;
+
+    const pct =
+      typeof entry.percent === 'number'
+        ? entry.percent
+        : typeof entry.utilization === 'number'
+          ? entry.utilization
+          : null;
+    if (pct == null) continue;
+
+    let resetsAt = null;
+    if (typeof entry.resets_at === 'string') resetsAt = Date.parse(entry.resets_at) || null;
+    else if (typeof entry.resets_at === 'number')
+      resetsAt = entry.resets_at < 1e12 ? entry.resets_at * 1000 : entry.resets_at;
+
+    const item = {
+      label: scopedLimitLabel(entry),
+      usedPercent: Math.max(0, Math.min(100, pct)),
+      resetsAt,
+      kind,
+      group: typeof entry.group === 'string' ? entry.group : null,
+    };
+    if (typeof entry.severity === 'string' && entry.severity) item.severity = entry.severity;
+    out.push(item);
+  }
+  return out;
+}
+
 // Call the live usage endpoint (rate-limited + cached). Returns normalized windows
 // or null if unavailable/failed.
 export async function getClaudeLiveUsage(cred) {
@@ -141,7 +347,7 @@ export async function getClaudeLiveUsage(cred) {
     // 401 (expired token) / 429 (throttled) / schema change -> degrade gracefully.
     return _cachedUsage
       ? { ..._cachedUsage, stale: true }
-      : { error: `HTTP ${res.status}`, fiveHour: null, weekly: null };
+      : { error: `HTTP ${res.status}`, fiveHour: null, weekly: null, scoped: [] };
   }
 
   let data;
@@ -154,14 +360,14 @@ export async function getClaudeLiveUsage(cred) {
   const fiveHour = pickWindow(data.five_hour);
   const weekly = pickWindow(data.seven_day);
   const opusWeekly = pickWindow(data.seven_day_opus);
+  const extraUsage = pickExtraUsage(data.spend, data.extra_usage);
+  const scoped = pickScopedLimits(data.limits, { hasOpusWeekly: !!opusWeekly });
   const normalized = {
     fiveHour,
     weekly,
     opusWeekly,
-    raw: {
-      // keep a few extra fields the UI may surface, but don't depend on them
-      spendPercent: typeof data?.spend?.percent === 'number' ? data.spend.percent : null,
-    },
+    extraUsage,
+    scoped,
     fetchedAt: now,
     stale: false,
   };
@@ -301,7 +507,8 @@ export async function getClaude() {
     getClaudeTokenUsage({ days: 30 }),
   ]);
 
-  const hasLive = !!(live && (live.fiveHour || live.weekly));
+  const hasScoped = !!(live?.scoped && live.scoped.length);
+  const hasLive = !!(live && (live.fiveHour || live.weekly || live.extraUsage || hasScoped));
   return {
     provider: 'claude',
     label: 'Claude',
@@ -310,9 +517,15 @@ export async function getClaude() {
     rateLimitTier: cred?.rateLimitTier || null,
     rateLimits: hasLive
       ? {
-          fiveHour: live.fiveHour,
-          weekly: live.weekly,
+          fiveHour: live.fiveHour || null,
+          weekly: live.weekly || null,
           opusWeekly: live.opusWeekly || null,
+          // Model-/surface-scoped windows from limits[] (e.g. weekly_scoped).
+          // Labels come from the API — never hardcoded product names.
+          scoped: live.scoped || [],
+          // Monthly usage-credit / extra-usage spend cap (when enabled).
+          // Separate from 5-hour / weekly windows — covers overage after plan limits.
+          extraUsage: live.extraUsage || null,
           stale: !!live.stale,
           fetchedAt: live.fetchedAt || null,
         }
