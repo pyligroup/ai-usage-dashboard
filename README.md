@@ -5,21 +5,27 @@ shows your **Claude Code**, **Codex CLI**, and **Cursor** subscription usage
 side-by-side — rate-limit / plan utilization, reset countdowns, and token
 trends — so you don't need separate windows for each tool.
 
-Use the **Settings** gear (top-right) to choose which tools appear; the choice is
-saved in a cookie on this machine.
+Use the **Settings** gear (top-right) to choose which tools appear, color mode,
+and **Compact view** (bars-only overview while working). Choices are saved in
+cookies on this machine (`ai_usage_tools`, `ai_usage_theme`, `ai_usage_layout`).
 
 > Unofficial project — not affiliated with Anthropic, OpenAI, or Cursor. See the
 > [Disclaimer](#disclaimer) below.
 
 ## What it shows
 
-- **Summary strip** (top): headline utilization for each visible tool, with reset
-  countdowns. A legend spells out which numbers are live and which are snapshots.
+- **Per-provider cards**: each visible tool gets one card with rate-limit /
+  plan / usage-credits progress bars **and** (in default layout) token detail
+  (sparklines / by-model where available).
   - Claude / Codex: **5-hour** and **weekly** windows
-  - Cursor: **plan (billing cycle)** and **auto models** (not 5-hour / weekly)
-- **Per-provider cards**: rate-limit / plan bars (green → amber ≥70% → red ≥90%)
-  with a per-provider provenance line, token usage, and (where available) model
-  breakdowns and sparklines. Cursor’s card also shows **API / named models**.
+  - Claude (when present): **scoped** weekly/model windows from the live
+    `limits[]` array (labels from the API, e.g. Weekly (Fable) — not hardcoded)
+  - Claude (when enabled): **usage credits** — monthly extra-usage spend cap
+    (`$used of $limit`), separate from rate-limit windows
+  - Cursor: **plan (billing cycle)** and **auto models** (not 5-hour / weekly);
+    **API / named models** and **on-demand credits** when present
+- **Compact view** (Settings checkbox): dense bars-only cards — no token
+  stats, sparklines, by-model, or accordion. Turn off to restore full detail.
 - **Every value labels its source.** Claude and Cursor % are fetched live; Codex %
   is read from Codex's last on-disk snapshot and is tagged with its age (it only
   changes when you actually run Codex).
@@ -29,12 +35,18 @@ saved in a cookie on this machine.
 - **Header** shows the last update time plus a live "next refresh in Ns" countdown.
   On first load the cards show shimmer **skeletons** rather than empty boxes.
 
-The layout is a full dashboard on wide screens and stacks to a single column on
-narrow / mobile widths. Dark and light themes follow your OS setting by default;
-override to Light or Dark in Settings (saved in the `ai_usage_theme` cookie).
-**Compact layout** (same Settings panel, `ai_usage_layout` cookie) is a
-full-width wallboard: the top meter strip is hidden (those %s already appear
-in each provider card), and limits sit next to tokens inside each card.
+Default layout across common widths (when Compact is off):
+
+| Width | Layout |
+|---|---|
+| ≤480 (phone) | 1-col; limits visible; token detail in accordion; compact chrome |
+| 481–1024 (tablet) | Same stacked accordion (until full dual-panel detail fits) |
+| ≥1025 (laptop+) | Side-by-side cards with full detail (2 cols, then 3 once tracks are ~420px+) |
+| Ultrawide | Content grows up to **2100px** so three cards breathe; centered beyond that (not edge-glued) |
+
+Dark and light themes follow your OS setting by default; override to Light or Dark
+in Settings (saved in the `ai_usage_theme` cookie). Compact view is saved in
+`ai_usage_layout` (`default` | `compact`).
 
 ## How it gets the data (pass-through auth, no separate login)
 
@@ -65,6 +77,13 @@ shows a "tokens only" badge instead of "live").
 - **Claude "If billed at API rates" ($):** the equivalent pay-as-you-go API
   list-price of your logged tokens — a "value delivered" figure, **not a bill.**
   Your subscription is flat-rate.
+- **Claude "Usage credits":** when your Max plan has extra usage enabled, the
+  live endpoint reports a monthly spend cap (`spend` / `extra_usage`). The
+  meter shows **%** plus **`$used of $limit · $remaining left`**. That is real
+  overage spend against your credit limit — distinct from the hypothetical
+  API-rate estimate above, and distinct from the 5-hour / weekly rate limits.
+  If extra usage is off, the bar is hidden; a credit **balance** is shown only
+  when Anthropic returns one.
 - **Cursor "Est. cost":** sum of `totalCents` from Cursor’s aggregated usage
   events for the period — also not a separate bill.
 
