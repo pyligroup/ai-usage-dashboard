@@ -315,11 +315,22 @@ export async function getCursorLiveUsage(cred) {
     auto: autoPct == null ? null : { usedPercent: autoPct, resetsAt: cycleEnd },
     api: apiPct == null ? null : { usedPercent: apiPct, resetsAt: cycleEnd },
     onDemand: onDemand?.enabled
-      ? {
-          enabled: true,
-          used: typeof onDemand.used === 'number' ? onDemand.used : null,
-          limit: typeof onDemand.limit === 'number' ? onDemand.limit : null,
-        }
+      ? (() => {
+          const used = typeof onDemand.used === 'number' ? onDemand.used : null;
+          const limit = typeof onDemand.limit === 'number' ? onDemand.limit : null;
+          // used/limit appear to be USD cents (same unit as plan.used/limit).
+          let usedPercent = null;
+          if (used != null && limit != null && limit > 0) {
+            usedPercent = Math.max(0, Math.min(100, (used / limit) * 100));
+          }
+          return {
+            enabled: true,
+            usedPercent,
+            used,
+            limit,
+            resetsAt: cycleEnd,
+          };
+        })()
       : null,
     billingCycleStart: cycleStart,
     billingCycleEnd: cycleEnd,
