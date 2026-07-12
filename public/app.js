@@ -460,7 +460,7 @@ function providerCard(key, p) {
     return card;
   }
 
-  // Two panels so live-dashboard layout can place limits | tokens side-by-side.
+  // Two panels so compact layout can place limits | tokens side-by-side.
   const limitsPanel = el('div', { class: 'card-panel card-limits' });
   const tokensPanel = el('div', { class: 'card-panel card-tokens' });
 
@@ -592,7 +592,7 @@ function providerCard(key, p) {
     tokensPanel.append(stats);
   }
 
-  // Daily / session sparkline + by-model — full-width card footer in live dashboard.
+  // Daily / session sparkline + by-model — full-width card footer in compact layout.
   const trend = el('div', { class: 'card-trend' });
   if (t.daily && Object.keys(t.daily).length) {
     trend.append(

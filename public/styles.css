@@ -390,19 +390,24 @@ main {
 }
 .limit-top {
   display: flex;
+  flex-wrap: wrap;
   align-items: baseline;
   justify-content: space-between;
+  gap: 2px 8px;
   margin-bottom: 7px;
+  min-width: 0;
 }
 .limit-name {
   font-size: 13px;
   color: var(--text-dim);
   font-weight: 550;
+  min-width: 0;
 }
 .limit-pct {
   font-size: 15px;
   font-weight: 660;
   font-variant-numeric: tabular-nums;
+  flex: none;
 }
 .bar {
   height: 9px;
@@ -496,9 +501,12 @@ main {
   font-weight: 650;
   margin: 18px 0 10px;
   display: flex;
+  flex-wrap: wrap;
   align-items: baseline;
   justify-content: space-between;
-  gap: 8px;
+  gap: 2px 8px;
+  min-width: 0;
+  line-height: 1.35;
 }
 .section-src {
   text-transform: none;
@@ -507,6 +515,7 @@ main {
   font-size: 10.5px;
   color: var(--text-faint);
   opacity: 0.85;
+  min-width: 0;
 }
 
 /* Sparkline for daily token trend */
@@ -576,9 +585,9 @@ main {
   text-align: center;
 }
 
-/* ---------- Live dashboard layout (Settings → Appearance) ----------
-   Full-bleed wallboard: use the side margins, one meter row, provider cards
-   as equal columns with limits | tokens side-by-side (no inner scrollbars).
+/* ---------- Compact layout (Settings → Appearance) ----------
+   Full-bleed wallboard: use the side margins, hide the top meter strip,
+   provider cards as equal columns with limits | tokens side-by-side.
    Cookie: ai_usage_layout=dashboard (legacy "fit" also maps here). */
 html[data-layout='dashboard'],
 html[data-layout='dashboard'] body {
@@ -624,7 +633,8 @@ html[data-layout='dashboard'] .providers {
   flex: 1 1 auto;
   min-height: 0;
   display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(0, 1fr));
+  /* Wrap before columns get too skinny for side-by-side limits|tokens. */
+  grid-template-columns: repeat(auto-fit, minmax(min(100%, 340px), 1fr));
   gap: 14px;
   align-content: stretch;
 }
@@ -781,24 +791,61 @@ html[data-layout='dashboard'] .unavailable {
   grid-column: 1 / -1;
 }
 @media (max-width: 900px) {
+  /* Narrow / mobile: drop the viewport-locked wallboard and stack content
+     so labels, bars, and sparklines stay readable (no crushed flex rows). */
+  html[data-layout='dashboard'],
+  html[data-layout='dashboard'] body {
+    height: auto;
+  }
   html[data-layout='dashboard'] body {
     overflow: auto;
   }
   html[data-layout='dashboard'] main {
     overflow: visible;
     height: auto;
+    flex: none;
+    min-height: 0;
   }
   html[data-layout='dashboard'] .providers {
     grid-template-columns: 1fr;
     height: auto;
+    flex: none;
+    min-height: 0;
   }
   html[data-layout='dashboard'] .card {
     height: auto;
+    min-height: 0;
+    overflow: visible;
   }
   html[data-layout='dashboard'] .card-body {
     grid-template-columns: 1fr;
     grid-template-rows: none;
     overflow: visible;
+    min-height: 0;
+    flex: none;
+  }
+  html[data-layout='dashboard'] .card-panel {
+    height: auto;
+    overflow: visible;
+  }
+  html[data-layout='dashboard'] .card-limits .limit-row {
+    flex: 0 0 auto;
+    min-height: auto;
+    padding: 0;
+    margin-bottom: 16px;
+  }
+  html[data-layout='dashboard'] .card-limits .limit-row:last-child {
+    margin-bottom: 0;
+  }
+  html[data-layout='dashboard'] .card-limits .limit-row + .limit-row {
+    border-top: none;
+  }
+  html[data-layout='dashboard'] .card-limits .section-label {
+    margin: 0 0 10px;
+  }
+  html[data-layout='dashboard'] .card-limits .note {
+    margin-top: 14px;
+    padding-top: 0;
   }
   html[data-layout='dashboard'] .card-body > .divider {
     display: block;
@@ -806,6 +853,7 @@ html[data-layout='dashboard'] .unavailable {
   html[data-layout='dashboard'] .card-trend {
     grid-template-columns: 1fr;
     grid-template-rows: none;
+    min-height: 0;
   }
   html[data-layout='dashboard'] .card-trend > .section-label,
   html[data-layout='dashboard'] .card-trend > .spark,
@@ -817,6 +865,14 @@ html[data-layout='dashboard'] .unavailable {
   html[data-layout='dashboard'] .card-trend > .spark {
     min-height: 56px;
     height: 56px;
+  }
+  html[data-layout='dashboard'] .card-trend > .models {
+    overflow: visible;
+    justify-content: flex-start;
+    gap: 7px;
+  }
+  html[data-layout='dashboard'] .card-trend > .models .model-row {
+    flex: 0 0 auto;
   }
 }
 
@@ -850,6 +906,18 @@ html[data-layout='dashboard'] .unavailable {
   }
   .countdown {
     display: none;
+  }
+  .section-label {
+    flex-direction: column;
+    align-items: flex-start;
+    gap: 2px;
+  }
+  .card-head {
+    flex-wrap: wrap;
+    row-gap: 6px;
+  }
+  .chip {
+    margin-left: 0;
   }
 }
 
