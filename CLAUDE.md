@@ -17,10 +17,10 @@ trends — so multiple tools' limits can be watched in one window.
   strong reason; adding a dependency is a deliberate decision, not a convenience.
 - **No build step, no framework.** Plain ES modules on the server, plain
   HTML/CSS/vanilla-JS on the client.
-- **Tool visibility**, **color mode**, and **live dashboard layout** are
-  configurable via a top-right Settings modal; choices are persisted in browser
-  cookies (`ai_usage_tools`, `ai_usage_theme`, `ai_usage_layout`). Tool filtering
-  is **client-side** — `/api/usage` still returns all providers.
+- **Tool visibility**, **color mode**, and **compact layout** are configurable
+  via a top-right Settings modal; choices are persisted in browser cookies
+  (`ai_usage_tools`, `ai_usage_theme`, `ai_usage_layout`). Tool filtering is
+  **client-side** — `/api/usage` still returns all providers.
 
 ## Run / develop
 
