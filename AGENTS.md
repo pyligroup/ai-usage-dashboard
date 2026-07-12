@@ -58,6 +58,9 @@ public/styles.css    All styling. Dark/light via prefers-color-scheme +
 public/app.js        Fetches /api/usage every 30s, renders, countdown, skeletons,
                      cookie-backed tool visibility + theme + layout (compact) +
                      settings modal. STACK_MQ mirrors the 1024px stack breakpoint.
+public/manifest.webmanifest + icon.svg
+                     Web app manifest for install-as-app / standalone
+                     chrome-less window (name, icon, theme_color).
 macos/               Optional macOS clients (Übersicht desktop widget + SwiftBar
                      menu-bar plugin). Thin `/api/usage` consumers only — no
                      credential or provider logic. See macos/README.md.
