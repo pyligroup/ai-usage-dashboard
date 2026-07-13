@@ -912,3 +912,15 @@ setInterval(tickCountdown, 1000);
 document.addEventListener('visibilitychange', () => {
   if (document.visibilityState === 'visible') refresh();
 });
+
+// Register the service worker so Android Chrome can install this as a real
+// standalone app (WebAPK) instead of a Chrome shortcut. Only works on a secure
+// context (HTTPS or localhost); over a plain http:// LAN IP the browser ignores
+// it, which is expected. Harmless where unsupported.
+if ('serviceWorker' in navigator) {
+  window.addEventListener('load', () => {
+    navigator.serviceWorker.register('/sw.js').catch((err) => {
+      console.warn('Service worker registration failed:', err);
+    });
+  });
+}
