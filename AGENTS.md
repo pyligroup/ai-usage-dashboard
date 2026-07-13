@@ -58,9 +58,18 @@ public/styles.css    All styling. Dark/light via prefers-color-scheme +
 public/app.js        Fetches /api/usage every 30s, renders, countdown, skeletons,
                      cookie-backed tool visibility + theme + layout (compact) +
                      settings modal. STACK_MQ mirrors the 1024px stack breakpoint.
-public/manifest.webmanifest + icon.svg
+public/manifest.webmanifest + icon.svg + icon-maskable.svg
                      Web app manifest for install-as-app / standalone
-                     chrome-less window (name, icon, theme_color).
+                     chrome-less window (name, icons, theme_color). Two icons:
+                     rounded `icon.svg` (purpose "any") + full-bleed
+                     `icon-maskable.svg` (purpose "maskable", no rounded
+                     corners so Android's adaptive mask doesn't crop artwork).
+public/sw.js         Service worker. Registered from app.js. Exists so Android
+                     Chrome installs a real standalone WebAPK (not a Chrome
+                     shortcut) — requires a secure context (HTTPS/localhost;
+                     a plain http:// LAN IP won't register it). Network-first
+                     cache of the static shell for instant/offline chrome;
+                     NEVER caches /api/* (live data must stay live).
 macos/               Optional macOS clients (Übersicht desktop widget + SwiftBar
                      menu-bar plugin). Thin `/api/usage` consumers only — no
                      credential or provider logic. See macos/README.md.
