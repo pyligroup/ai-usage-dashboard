@@ -37,9 +37,13 @@ export function fmtAge(tsMs) {
   return `${days}d ${hrs % 24}h ago`;
 }
 
-/** Codex provenance chip text — never "live". */
+/** Codex provenance chip text — never "live". Flag old snapshots that may lag. */
 export function codexAge(capturedAt) {
-  return `snapshot · ${fmtAge(capturedAt)}`;
+  const age = fmtAge(capturedAt);
+  if (!capturedAt || Date.now() - capturedAt > 60 * 60 * 1000) {
+    return `snapshot · ${age} · may lag`;
+  }
+  return `snapshot · ${age}`;
 }
 
 /** Highest non-null usedPercent among windows — the limit that actually binds. */

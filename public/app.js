@@ -167,6 +167,15 @@ function fmtAge(tsMs) {
   return `${days}d ${hrs % 24}h ago`;
 }
 
+// Codex % only moves when a rollout with rate_limits lands on disk. After ~1h,
+// warn that ephemeral / non-persisted runs may have pushed live usage ahead.
+const CODEX_STALE_MS = 60 * 60 * 1000;
+
+function isCodexSnapshotStale(capturedAt) {
+  if (!capturedAt) return true;
+  return Date.now() - capturedAt > CODEX_STALE_MS;
+}
+
 function el(tag, attrs = {}, children = []) {
   const e = document.createElement(tag);
   for (const [k, v] of Object.entries(attrs)) {
@@ -388,8 +397,16 @@ function buildLimitsPanel(key, p, { compact = false } = {}) {
           : 'live'
         : `saved ${fmtAge(rl.capturedAt)}`
       : null;
-    limitsPanel.append(limitRow('5-hour window', rl?.fiveHour, limitSrc));
-    limitsPanel.append(limitRow('Weekly window', rl?.weekly, limitSrc));
+    // Codex: omit windows missing from the newest snapshot (e.g. weekly-only
+    // after OpenAI dropped 5h for some plans). Claude keeps both rows so a
+    // missing live window still shows as "—" rather than disappearing.
+    if (isCodex) {
+      if (rl?.fiveHour) limitsPanel.append(limitRow('5-hour window', rl.fiveHour, limitSrc));
+      if (rl?.weekly) limitsPanel.append(limitRow('Weekly window', rl.weekly, limitSrc));
+    } else {
+      limitsPanel.append(limitRow('5-hour window', rl?.fiveHour, limitSrc));
+      limitsPanel.append(limitRow('Weekly window', rl?.weekly, limitSrc));
+    }
     if (rl?.opusWeekly) limitsPanel.append(limitRow('Weekly (Opus)', rl.opusWeekly, limitSrc));
     // Dynamic scoped windows from Anthropic limits[] (labels from API).
     if (isClaude && Array.isArray(rl?.scoped)) {
@@ -442,11 +459,16 @@ function buildLimitsPanel(key, p, { compact = false } = {}) {
             : 'Live rate-limit % unavailable — showing local token totals.';
       limitsPanel.append(el('div', { class: 'note' }, why));
     } else if (isCodex && !compact) {
+      const ageMs = rl.capturedAt ? Date.now() - rl.capturedAt : null;
+      const staleHint =
+        ageMs != null && ageMs > CODEX_STALE_MS
+          ? ' This snapshot looks old — chatgpt.com/codex/settings/usage may already be higher if you ran `codex exec --ephemeral` (or other non-persisted sessions) since then.'
+          : '';
       limitsPanel.append(
         el(
           'div',
           { class: 'note' },
-          'These are from Codex’s last on-disk snapshot, so they only change when you actually run Codex.',
+          `From Codex’s last on-disk rollout under ~/.codex/sessions. Updates only when a session writes rate_limits — not for \`codex exec --ephemeral\`.${staleHint}`,
         ),
       );
     }
@@ -632,10 +654,14 @@ function providerCard(key, p, { extraOpen } = {}) {
     chipTip =
       'Fetched live from Cursor (cursor.com/api/usage-summary). Plan % matches Spending "Total Usage" (billing-cycle cutoff), not a 5-hour window.';
   } else {
-    chipText = `snapshot · ${fmtAge(rl.capturedAt)}`;
-    chipCls = 'chip snapshot';
-    chipTip =
-      'Read from the snapshot Codex wrote to disk on its last run. Not fetched live — it only updates when you use Codex.';
+    const stale = isCodexSnapshotStale(rl.capturedAt);
+    chipText = stale
+      ? `snapshot · ${fmtAge(rl.capturedAt)} · may lag`
+      : `snapshot · ${fmtAge(rl.capturedAt)}`;
+    chipCls = stale ? 'chip snapshot stale' : 'chip snapshot';
+    chipTip = stale
+      ? 'From the last on-disk Codex rollout with rate_limits. Not live. Age suggests recent usage (especially `codex exec --ephemeral`) may not be reflected — compare chatgpt.com/codex/settings/usage.'
+      : 'Read from the snapshot Codex wrote to disk on its last non-ephemeral run. Not fetched live — `codex exec --ephemeral` does not update this.';
   }
 
   let subText;

@@ -21,8 +21,10 @@
 //
 // We deliberately do NOT call the live chatgpt.com/backend-api endpoint or refresh
 // the OAuth token: refreshing independently races Codex's own refresh-token rotation
-// and can revoke the login. The persisted snapshot is fresh enough (updated every
-// turn Codex runs) and needs no auth.
+// and can revoke the login. The persisted snapshot is only as fresh as the last
+// Codex run that *wrote* a rollout — `codex exec --ephemeral` (and anything else
+// that skips session persistence) still burns plan quota server-side but leaves
+// no local rate_limits for us to read. Needs no auth; never invent a live %.
 
 import { promises as fs } from 'node:fs';
 import path from 'node:path';

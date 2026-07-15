@@ -103,8 +103,14 @@ version-fragile.** Codex is local-only by design.
   `rate_limits: null` and continue to the next older event/file. When 5h
   returns in a recent payload (`window_minutes` 300), it shows again.
   `capturedAt` is that newest usable snapshot.
-- **This means Codex's % is only as fresh as your last Codex run.** It is NOT live.
-  The UI must never label it "live" — it says "snapshot · <age>". Preserve that.
+- **This means Codex's % is only as fresh as your last Codex run that persisted a
+  rollout.** It is NOT live. The UI must never label it "live" — it says
+  `snapshot · <age>` (and `· may lag` when the snapshot is older than ~1h).
+  Preserve that. Importantly, `codex exec --ephemeral` (and any other mode that
+  skips writing session files) still consumes plan quota on OpenAI’s side but
+  leaves **no** local `rate_limits` for this dashboard to read — so ChatGPT’s
+  usage page can be ahead of the card. Do not “fix” that by calling a live
+  Codex usage endpoint or refreshing OAuth tokens.
 - Token totals (last 30 days): sum **in-window deltas** of per-session
   `total_token_usage`, not the final cumulative total. Resumed/long-running
   sessions that started before the cutoff would otherwise over-count.
@@ -256,7 +262,9 @@ New code must uphold this.
   billing-cycle ("current period") from the dashboard API when
   `billingCycleStart` is known, else "last 30 days". Cursor has no daily sparkline.
 - Provenance chips: Claude/Cursor → `live` / `live (cached)` / `tokens only`;
-  Codex → `snapshot · <age>` (never "live").
+  Codex → `snapshot · <age>` (never "live"); append `· may lag` when the
+  snapshot is older than ~1h (ephemeral / non-persisted runs may have moved
+  live usage ahead).
 
 ## Product principles (why the UI is the way it is)
 

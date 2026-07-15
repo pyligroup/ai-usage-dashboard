@@ -61,9 +61,11 @@ never log in again.
 
 > **Live vs snapshot — an important distinction.** Claude's and Cursor's % are
 > fetched *live* (throttled to once every few minutes). Codex's % is read from the
-> snapshot Codex writes to disk on each run — so it only updates when you actually
-> use Codex, and the dashboard shows its age ("snapshot · 2m ago") rather than
-> claiming it's live.
+> snapshot Codex writes to disk on each run that persists a rollout — so it only
+> updates when a non-ephemeral session writes `rate_limits`. The dashboard shows
+> its age (`snapshot · 2m ago`, or `· may lag` when older than ~1h) rather than
+> claiming it's live. `codex exec --ephemeral` still burns plan quota but leaves
+> no local snapshot, so ChatGPT’s usage page can be ahead of this card.
 
 The live endpoints are **undocumented** and may change or become temporarily
 unavailable. When that happens the dashboard **degrades gracefully** (the card
