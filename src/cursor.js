@@ -4,6 +4,7 @@
 //   1. LIVE plan % + token totals via Cursor's undocumented dashboard endpoints:
 //        GET  https://cursor.com/api/usage-summary
 //        POST https://cursor.com/api/dashboard/get-aggregated-usage-events
+//        POST https://cursor.com/api/dashboard/get-credit-grants-balance
 //      Auth is the WorkOS session cookie built from the JWT Cursor already stores
 //      locally (see getCursorCredential). Undocumented + version-fragile → allowed
 //      to fail; we degrade to membership metadata from the local state DB.
@@ -38,6 +39,7 @@ const execFileP = promisify(execFile);
 
 const USAGE_SUMMARY_URL = 'https://cursor.com/api/usage-summary';
 const AGGREGATED_URL = 'https://cursor.com/api/dashboard/get-aggregated-usage-events';
+const CREDIT_GRANTS_URL = 'https://cursor.com/api/dashboard/get-credit-grants-balance';
 const AUTH_ME_URL = 'https://cursor.com/api/auth/me';
 
 // Same throttle posture as Claude — undocumented endpoints, don't hammer them.
@@ -235,6 +237,28 @@ function toInt(v) {
   return 0;
 }
 
+// Promo / referral usage credits (Spending → Credits). Amounts are USD cents,
+// often returned as strings. Distinct from plan included allowance and from
+// on-demand — applied after included usage, before card charges. Only surface
+// when remaining > 0 (matches "show if you have credits left").
+function pickCredits(data) {
+  if (!data || typeof data !== 'object') return null;
+  const remaining = toInt(data.creditBalanceCents);
+  if (!(remaining > 0)) return null;
+  const total = toInt(data.totalCents);
+  const used = toInt(data.usedCents);
+  let usedPercent = null;
+  if (total > 0) {
+    usedPercent = Math.max(0, Math.min(100, (used / total) * 100));
+  }
+  return {
+    remaining,
+    total: total > 0 ? total : null,
+    used: total > 0 ? used : null,
+    usedPercent,
+  };
+}
+
 async function cursorFetch(url, { method = 'GET', body = null, cred } = {}) {
   const headers = {
     Cookie: sessionCookie(cred),
@@ -336,6 +360,8 @@ export async function getCursorLiveUsage(cred) {
           };
         })()
       : null,
+    // Promo/referral credit grants — filled below; null when balance is 0 / absent.
+    credits: null,
     billingCycleStart: cycleStart,
     billingCycleEnd: cycleEnd,
     membershipType: summary?.membershipType || null,
@@ -343,6 +369,20 @@ export async function getCursorLiveUsage(cred) {
     stale: false,
     fetchedAt: now,
   };
+
+  // Spending → Credits (grant balance). Best-effort; plan % still useful if this fails.
+  try {
+    const creditsRes = await cursorFetch(CREDIT_GRANTS_URL, {
+      method: 'POST',
+      body: {},
+      cred,
+    });
+    if (creditsRes.ok) {
+      rateLimits.credits = pickCredits(await creditsRes.json());
+    }
+  } catch {
+    // optional
+  }
 
   // Token aggregates for the current billing cycle when we know cycleStart;
   // otherwise fall back to a rolling 30d window. Do NOT clip a longer cycle to

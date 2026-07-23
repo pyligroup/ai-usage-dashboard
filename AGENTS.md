@@ -173,8 +173,16 @@ as plan / billing-cycle — **never** as "5-hour" or "weekly".
     meter because auto vs API models are weighted differently. Do **not**
     compute headline % from `used / limit`.
   - Normalized `rateLimits` shape: `plan`, `auto`, `api`, plus optional
-    `onDemand` / billing-cycle timestamps. The Cursor card shows plan + auto,
-    plus API / named models and on-demand when present.
+    `onDemand` / `credits` / billing-cycle timestamps. The Cursor card shows
+    plan + auto, plus API / named models and on-demand when present, and
+    **Credits** when a promo/referral grant balance remains (`remaining > 0`).
+  - Promo/referral credit balance: `POST https://cursor.com/api/dashboard/get-credit-grants-balance`
+    (empty JSON body, same cookie auth + `Origin`). Returns
+    `hasCreditGrants`, `creditBalanceCents` / `totalCents` / `usedCents`
+    (often strings). Normalize as `rateLimits.credits`: `{ remaining, total,
+    used, usedPercent }` in **USD cents**. UI shows the bar **only when
+    `remaining > 0`** (caption like Spending: `$8 / $25 remaining`). These are
+    **not** the billing-cycle plan bar and **not** on-demand.
   - Throttled to **≥180s** between real calls (cached in-module).
 - Token aggregates: `POST https://cursor.com/api/dashboard/get-aggregated-usage-events`
   with `Origin: https://cursor.com` (CSRF required on POSTs) and body
@@ -257,8 +265,10 @@ New code must uphold this.
   When disabled, omit the bar; if `extraUsage.balance` is present, show that
   balance as a note.
 - Cursor cards: **plan (billing cycle)** + **auto models**, plus **API /
-  named models** and **On-demand credits** when `onDemand.enabled`. Never
-  reuse 5-hour / weekly labels for Cursor.
+  named models** and **On-demand credits** when `onDemand.enabled`. Also show
+  **Credits** (promo/referral grant balance) when `credits.remaining > 0`
+  (caption `$remaining / $total remaining`). Never reuse 5-hour / weekly
+  labels for Cursor.
 - Token sections: Claude/Codex = "last 30 days" from local logs; Cursor =
   billing-cycle ("current period") from the dashboard API when
   `billingCycleStart` is known, else "last 30 days". Cursor has no daily sparkline.
@@ -317,7 +327,8 @@ There is no CI to lean on. Before saying a change works:
   - Claude: `api.anthropic.com/api/oauth/usage`
   - Cursor: `cursor.com` usage/dashboard/auth endpoints used today
     (`/api/usage-summary`, `/api/dashboard/get-aggregated-usage-events`,
-    `/api/auth/me`) with session cookie auth
+    `/api/dashboard/get-credit-grants-balance`, `/api/auth/me`) with session
+    cookie auth
   Adding any other outbound call is a deliberate, reviewed decision. Codex stays
   offline.
 - Path-traversal guard in the static file server (`server.js`) must stay.

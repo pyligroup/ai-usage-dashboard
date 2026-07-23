@@ -213,6 +213,15 @@ function fmtCreditsHint(eu) {
   return parts.join(' · ');
 }
 
+// Cursor promo/referral Credits caption — matches Spending "$8 / $25 remaining".
+// Amounts are USD cents on the wire.
+function fmtCursorCreditsHint(c) {
+  if (!c || c.remaining == null) return '';
+  const rem = fmtMoney(c.remaining * 0.01);
+  if (c.total != null) return `${rem} / ${fmtMoney(c.total * 0.01)} remaining`;
+  return `${rem} remaining`;
+}
+
 // ---------- sparkline ----------
 function sparkline(dailyMap, accent) {
   const days = [];
@@ -379,6 +388,27 @@ function buildLimitsPanel(key, p, { compact = false } = {}) {
           fmtSpendPair(od.used, od.limit, { cents: true }) || 'billing cycle',
         ),
       );
+    }
+    // Promo/referral Credits (Spending → Credits) — only when remaining > 0.
+    const credits = rl?.credits;
+    if (credits && credits.remaining > 0) {
+      limitsPanel.append(
+        limitRow(
+          'Credits',
+          credits,
+          limitSrc,
+          fmtCursorCreditsHint(credits),
+        ),
+      );
+      if (!compact) {
+        limitsPanel.append(
+          el(
+            'div',
+            { class: 'note' },
+            'Account credits (promo/referral) apply after included plan usage and before on-demand charges — not the billing-cycle plan bar.',
+          ),
+        );
+      }
     }
     if (!hasLimits) {
       const why =
