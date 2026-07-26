@@ -3,7 +3,7 @@
 Thin consumers of the local dashboard API — **no credential reads, no provider
 logic**. Both poll `GET http://127.0.0.1:4317/api/usage` and reuse the same
 display rules as the web UI (Claude/Codex 5-hour + weekly; Cursor plan + auto;
-Codex labeled as a snapshot, never “live”).
+Codex labeled live or snapshot according to how it was read).
 
 **Prerequisite:** the dashboard server must be running:
 
@@ -38,7 +38,7 @@ ln -sf "$REPO/macos/uebersicht/ai-usage.jsx" "$WIDGETS/ai-usage.jsx"
 4. Ensure `npm start` is running. The widget refreshes every 30s.
 5. If the server is down, the widget shows **Dashboard offline — run npm start**.
 
-Codex’s caption is `snapshot · Xm ago` from `rateLimits.capturedAt`.
+Codex’s caption is `live` when read through Codex's CLI, else `snapshot · Xm ago` from `rateLimits.capturedAt`.
 
 ## SwiftBar (menu bar)
 

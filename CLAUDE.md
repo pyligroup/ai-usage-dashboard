@@ -381,10 +381,12 @@ New code must uphold this.
 - Token sections: Claude/Codex = "last 30 days" from local logs; Cursor =
   billing-cycle ("current period") from the dashboard API when
   `billingCycleStart` is known, else "last 30 days". Cursor has no daily sparkline.
-- Provenance chips: Claude/Cursor → `live` / `live (cached)` / `tokens only`;
-  Codex → `snapshot · <age>` (never "live"); append `· may lag` when the
-  snapshot is older than ~1h (ephemeral / non-persisted runs may have moved
-  live usage ahead).
+- Provenance chips: Claude/Cursor → `live` / `live (cached)` / `tokens only`.
+  Codex → `live` when `rateLimits.source === 'live'` (read through `codex
+  app-server`), else `snapshot · <age>`, appending `· may lag` past ~1h
+  (ephemeral / non-persisted runs may have moved live usage ahead). Never label
+  a snapshot "live", and never leave live data labelled "snapshot" — both are
+  the same class of lie.
 
 ## Product principles (why the UI is the way it is)
 

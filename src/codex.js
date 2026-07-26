@@ -1,6 +1,13 @@
 // Codex (OpenAI ChatGPT plan) usage reader.
 //
-// Primary, no-network source: the per-turn rate-limit snapshot Codex persists to
+// Two layers, mirroring the other providers:
+//   live     -> `codex app-server` (Codex's own CLI) exposes a documented
+//               JSON-RPC method `account/rateLimits/read`. See the live layer
+//               below for why this is safe and what it deliberately never does.
+//   fallback -> the on-disk rollout snapshot described next, used whenever the
+//               live read is unavailable. `rateLimits.source` says which.
+//
+// Fallback source (no network): the per-turn rate-limit snapshot Codex persists to
 //   ~/.codex/sessions/YYYY/MM/DD/rollout-<ts>-<uuid>.jsonl
 // Each turn writes an event_msg with payload.type === "token_count", whose payload
 // carries both info.total_token_usage and a `rate_limits` object with `primary` /
@@ -19,12 +26,14 @@
 // only the windows present there. When 5h returns in a recent payload, it
 // shows again via window_minutes classification.
 //
-// We deliberately do NOT call the live chatgpt.com/backend-api endpoint or refresh
-// the OAuth token: refreshing independently races Codex's own refresh-token rotation
-// and can revoke the login. The persisted snapshot is only as fresh as the last
-// Codex run that *wrote* a rollout — `codex exec --ephemeral` (and anything else
-// that skips session persistence) still burns plan quota server-side but leaves
-// no local rate_limits for us to read. Needs no auth; never invent a live %.
+// We deliberately do NOT call the chatgpt.com/backend-api endpoint ourselves and
+// never refresh the OAuth token: refreshing independently races Codex's own
+// refresh-token rotation and can revoke the login. Going through `codex
+// app-server` is safe precisely because Codex owns both the request and the
+// token. When only the snapshot is available it is as fresh as the last Codex
+// run that *wrote* a rollout — `codex exec --ephemeral` still burns plan quota
+// but leaves no local rate_limits — so label it `snapshot` with its age and
+// never invent a live %.
 
 import { promises as fs } from 'node:fs';
 import path from 'node:path';
