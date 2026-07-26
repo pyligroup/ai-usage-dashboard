@@ -157,9 +157,20 @@ version-fragile.** Codex is local-only by design.
   `rate_limits: null` and continue to the next older event/file. When 5h
   returns in a recent payload (`window_minutes` 300), it shows again.
   `capturedAt` is that newest usable snapshot.
-- **This means Codex's % is only as fresh as your last Codex run that persisted a
-  rollout.** It is NOT live. The UI must never label it "live" — it says
-  `snapshot · <age>` (and `· may lag` when the snapshot is older than ~1h).
+- **Live layer (preferred):** `codex app-server` (Codex's own CLI) exposes a
+  documented JSON-RPC method `account/rateLimits/read`. `src/codex.js` spawns it,
+  reads, and the subprocess exits (~500ms), throttled to >=180s. This is NOT the
+  forbidden path: we never call `chatgpt.com/backend-api/wham/usage` ourselves and
+  never refresh the OAuth token (refresh is a separate explicit method,
+  `chatgptAuthTokens/refresh`, that we do not call — verified auth.json stays
+  byte-identical). Reads are account metadata: no session, no turn, **no tokens
+  consumed** (verified `lifetimeTokens` unchanged across repeated reads). Because
+  it is live it DOES reflect `codex exec --ephemeral`. `rateLimits.source` is
+  `'live'`; the chip says `live` like the other providers.
+- **Fallback layer:** when the spawn fails (no `codex` on PATH, protocol drift —
+  `app-server` is `[experimental]`), it degrades to the on-disk rollout below and
+  sets `source: 'snapshot'`. The UI must then say `snapshot · <age>`
+  (and `· may lag` past ~1h), never "live".
   Preserve that. Importantly, `codex exec --ephemeral` (and any other mode that
   skips writing session files) still consumes plan quota on OpenAI’s side but
   leaves **no** local `rate_limits` for this dashboard to read — so ChatGPT’s
@@ -168,9 +179,13 @@ version-fragile.** Codex is local-only by design.
 - Token totals (last 30 days): sum **in-window deltas** of per-session
   `total_token_usage`, not the final cumulative total. Resumed/long-running
   sessions that started before the cutoff would otherwise over-count.
-- **Never call the live `chatgpt.com/backend-api/wham/usage` endpoint from here, and
-  never refresh the Codex OAuth token.** Refreshing independently races Codex's own
-  refresh-token rotation and can revoke the user's login. Read-only, always.
+- **Never call the live `chatgpt.com/backend-api/wham/usage` endpoint from here,
+  and never refresh the Codex OAuth token.** Refreshing independently races
+  Codex's own refresh-token rotation and can revoke the user's login. Read-only,
+  always. This bans *those two things specifically* — not live Codex data as
+  such: going through `codex app-server` (above) is safe precisely because Codex
+  itself owns the request and the token, and the refresh method is separate and
+  never called.
 
 ### Claude (`src/claude.js`) — live endpoint + local token totals
 

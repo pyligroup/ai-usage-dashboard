@@ -4,7 +4,8 @@
 //   Claude / Codex → binding max(fiveHour, weekly[, opusWeekly]) in the bar;
 //                    dropdown still shows each window separately
 //   Cursor         → plan (headline) + auto  (never "5-hour")
-//   Codex          → snapshot age from capturedAt (never "live")
+//   Codex          → "live (codex cli)" when read via `codex app-server`,
+//                    else snapshot age from capturedAt
 
 export const USAGE_URL = 'http://127.0.0.1:4317/api/usage';
 export const DASHBOARD_URL = 'http://127.0.0.1:4317/';
@@ -37,8 +38,16 @@ export function fmtAge(tsMs) {
   return `${days}d ${hrs % 24}h ago`;
 }
 
-/** Codex provenance chip text — never "live". Flag old snapshots that may lag. */
-export function codexAge(capturedAt) {
+/**
+ * Codex provenance chip text.
+ *
+ * Two sources: a live read through Codex's own CLI (`codex app-server`), or the
+ * on-disk rollout snapshot. Pass `source` from rateLimits — "snapshot · 2m ago"
+ * on live data is the same class of mislabel as calling the snapshot "live".
+ * Old snapshots are flagged as possibly lagging.
+ */
+export function codexAge(capturedAt, source) {
+  if (source === 'live') return 'live';
   const age = fmtAge(capturedAt);
   if (!capturedAt || Date.now() - capturedAt > 60 * 60 * 1000) {
     return `snapshot · ${age} · may lag`;
@@ -122,8 +131,8 @@ function summarizeCodex(provider) {
     headlinePct: ok ? rl.fiveHour?.usedPercent ?? null : null,
     secondaryLabel: 'weekly',
     secondaryPct: ok ? rl.weekly?.usedPercent ?? null : null,
-    // Always snapshot — never "live"
-    caption: ok ? codexAge(rl.capturedAt) : provider?.error ? 'unavailable' : 'no data',
+    // live (codex cli) when app-server answered, else snapshot age
+    caption: ok ? codexAge(rl.capturedAt, rl.source) : provider?.error ? 'unavailable' : 'no data',
   };
 }
 

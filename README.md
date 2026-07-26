@@ -56,7 +56,7 @@ never log in again.
 
 | Provider | Live rate-limit / plan % | Token totals |
 |---|---|---|
-| **Codex** | Read from the per-turn snapshot Codex persists to `~/.codex/sessions/**/rollout-*.jsonl` (no network, no auth). | Summed from the same rollout files (last 30 days). |
+| **Codex** | Read live through Codex's own CLI (`codex app-server` → `account/rateLimits/read`), so it includes `codex exec --ephemeral`. No tokens are consumed and no credentials are touched. Falls back to the per-turn snapshot in `~/.codex/sessions/**/rollout-*.jsonl` if that's unavailable. | Summed from the same rollout files (last 30 days). |
 | **Claude** | Fetched from the same endpoint Claude Code's `/usage` meter uses (`api.anthropic.com/api/oauth/usage`), authenticated with the OAuth token Claude Code already stored (macOS Keychain / `~/.claude/.credentials.json`). | Summed from `~/.claude/projects/**/*.jsonl` (last 30 days). |
 | **Cursor** | Fetched from Cursor's dashboard API (`cursor.com/api/usage-summary`), authenticated with the session JWT Cursor already stored in `state.vscdb` (or the `cursor-access-token` keychain entry). Headline % = `totalPercentUsed`. Promo/referral **Credits** from `get-credit-grants-balance` when remaining > 0. | Aggregated via `cursor.com/api/dashboard/get-aggregated-usage-events` for the current billing period (or last 30 days if cycle start is unknown). |
 
