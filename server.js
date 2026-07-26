@@ -1,8 +1,9 @@
 // Local usage dashboard server. No dependencies — Node 20+ built-ins only.
 //
 // Serves the static dashboard from ./public and exposes:
-//   GET /api/usage   -> combined Claude + Codex + Cursor usage JSON
-//   GET /api/health  -> { ok: true }
+//   GET /api/usage         -> combined Claude + Codex + Cursor usage JSON
+//   GET /api/usage/stream  -> same payload pushed over SSE on one shared cadence
+//   GET /api/health        -> { ok: true }
 //
 // All the fragile provider logic lives in ./src. The frontend just polls /api/usage.
 
@@ -66,6 +67,107 @@ async function buildUsage() {
   return _aggInflight;
 }
 
+// ---------- shared usage stream (SSE) ----------
+//
+// Terminal clients subscribe here instead of polling. The server owns ONE
+// refresh cadence and pushes the same frame to every subscriber at the same
+// instant, so N panes can't drift onto different sides of the cache boundary
+// and show different numbers — which is exactly what independent 30s timers did.
+//
+// /api/usage stays a plain poll endpoint for the browser and macOS clients;
+// this is purely additive.
+const STREAM_INTERVAL_MS = 30 * 1000;
+/** @type {Set<{res: import('node:http').ServerResponse}>} */
+const subscribers = new Set();
+let streamTimer = null;
+let _lastFrame = null;
+
+function frameFor(payload) {
+  return {
+    ...payload,
+    // Tell clients when the next push lands so their countdowns agree with the
+    // server's cadence instead of each running its own clock.
+    nextRefreshAt: Date.now() + STREAM_INTERVAL_MS,
+    streamIntervalMs: STREAM_INTERVAL_MS,
+  };
+}
+
+function writeEvent(res, event, data) {
+  try {
+    res.write(`event: ${event}\ndata: ${JSON.stringify(data)}\n\n`);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+async function broadcast() {
+  if (!subscribers.size) return;
+  let payload;
+  try {
+    payload = await buildUsage();
+  } catch (err) {
+    for (const sub of subscribers) writeEvent(sub.res, 'error', { error: String(err) });
+    return;
+  }
+  const frame = frameFor(payload);
+  _lastFrame = frame;
+  for (const sub of subscribers) {
+    if (!writeEvent(sub.res, 'usage', frame)) subscribers.delete(sub);
+  }
+}
+
+// The broadcast timer only runs while someone is listening — an idle dashboard
+// server shouldn't be scanning the filesystem or hitting live endpoints.
+function ensureStreamTimer() {
+  if (streamTimer || !subscribers.size) return;
+  streamTimer = setInterval(() => {
+    broadcast().catch(() => {});
+  }, STREAM_INTERVAL_MS);
+  if (streamTimer.unref) streamTimer.unref();
+}
+
+function stopStreamTimerIfIdle() {
+  if (streamTimer && !subscribers.size) {
+    clearInterval(streamTimer);
+    streamTimer = null;
+  }
+}
+
+async function handleStream(req, res) {
+  res.writeHead(200, {
+    'Content-Type': 'text/event-stream; charset=utf-8',
+    'Cache-Control': 'no-store',
+    Connection: 'keep-alive',
+    'X-Accel-Buffering': 'no',
+  });
+  // Some proxies/stacks hold the first bytes; a comment flushes headers.
+  res.write(': connected\n\n');
+
+  const sub = { res };
+  subscribers.add(sub);
+  ensureStreamTimer();
+
+  const drop = () => {
+    subscribers.delete(sub);
+    stopStreamTimerIfIdle();
+  };
+  req.on('close', drop);
+  req.on('error', drop);
+  res.on('error', drop);
+
+  // Send immediately so a joining pane paints at once rather than waiting up to
+  // a full interval. Reuses the cache, so a second pane joining costs nothing.
+  try {
+    const payload = await buildUsage();
+    const frame = frameFor(payload);
+    _lastFrame = frame;
+    writeEvent(res, 'usage', frame);
+  } catch (err) {
+    writeEvent(res, 'error', { error: String(err) });
+  }
+}
+
 const MIME = {
   '.html': 'text/html; charset=utf-8',
   '.js': 'text/javascript; charset=utf-8',
@@ -108,6 +210,11 @@ const server = http.createServer(async (req, res) => {
       const payload = await buildUsage();
       res.writeHead(200, { 'Content-Type': 'application/json', 'Cache-Control': 'no-store' });
       res.end(JSON.stringify(payload));
+      return;
+    }
+    // Shared push stream for terminal clients — see handleStream().
+    if (url.pathname === '/api/usage/stream') {
+      await handleStream(req, res);
       return;
     }
     await serveStatic(req, res);
