@@ -121,24 +121,31 @@ Color follows the TTY and honors `NO_COLOR` — piping to a file or another
 command gives you plain text automatically. In an interactive terminal `--once`
 still prints in color; add `--no-color` when you want plain text there too.
 
-#### It collapses horizontally
+#### Uniform bars, and it collapses horizontally
 
-Narrow the pane and each row switches from *meta beside the bar* to *meta
-stacked under it*, so the supporting text stays readable instead of being cut
-to `82% e…`:
+Every bar spans the full width on its own line, with its supporting text
+beneath. Nothing shares a row with a bar — that's what lets you compare fills
+between rows and providers at a glance:
 
 ```
-  Weekly window              17%                  Weekly window    17%
-  ████████░░░░░░░░  resets in 4d 8h · 38% …  →    ████████░░░░░░░░░░░░░░
-                                                  resets in 4d 8h · 38% elapsed · live
+  Weekly window                18%
+  █████████████████░░░░░░░░░░░░░░░░░░░░┃░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░
+  resets in 4d 7h · 38% elapsed · live
+
+  Usage credits                88%
+  ████████████████████████████████████████████████████████░░░░░░░░░░░░
+  $88.28 of $100.00 · $11.72 left · live
 ```
 
-The switch is per-row and driven by whether the text actually fits — a row with
-long meta (Cursor's `resets in 13d 23h · 55% elapsed · live`) stacks sooner than
-a short one. Section labels, the cost note, and the footer wrap the same way.
-It stays fully readable down to **40 columns**; only long model names in
-*By model* are elided. Bars, percentages, reset times, and captions are never
-truncated.
+Narrow the pane and the bars shrink together, staying equal, while the text
+wraps instead of being cut to `82% e…`. Section labels, the cost note, and the
+footer wrap the same way. Fully readable down to **40 columns**; only long model
+names in *By model* are elided. Bars, percentages, reset times, and captions are
+never truncated.
+
+The `┃` mark on each bar is the pace marker — where you are in the window's
+elapsed time. Fill to the left of it means you're pacing under the clock; past
+it means you're ahead of pace.
 
 #### Running more than one
 

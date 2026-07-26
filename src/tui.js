@@ -287,27 +287,20 @@ function bar(pct, width, elapsed) {
     .join('');
 }
 
-// Narrowest bar worth drawing beside its meta text. Below this the side-by-side
-// layout is pointless — stack instead.
-const MIN_SIDE_BAR = 18;
-
 /**
  * One rate-limit / plan row. Mirrors limitRow() in public/app.js.
  *
- * The layout is chosen per row by whether the meta text actually fits beside
- * the bar — not by a fixed width threshold. A row whose meta is long (Cursor's
- * "resets in 13d 23h · 55% elapsed · live") stacks sooner than a short one, and
- * nothing is ever truncated into uselessness ("82% e…", "$…").
+ * EVERY bar spans the full content width, and the meta always sits beneath it:
  *
- * Side-by-side, when it fits:
- *   name ......................  47%
- *   [bar]  hint · resets in Xh · Y% elapsed · source
- *
- * Stacked, when it doesn't — bar spans the pane, meta wraps beneath it, so the
- * pane can be collapsed horizontally and stay readable:
  *   name ................  47%
- *   [bar]
+ *   [========================== full-width bar ==========================]
  *   hint · resets in Xh · Y% elapsed · source
+ *
+ * Uniform bar length is the whole point of a bar — it's what makes fills
+ * comparable at a glance between rows and between providers. An earlier version
+ * sized each bar to whatever its meta text left over, which made Codex's bar
+ * nearly full-width and Claude's two-thirds, so the fills couldn't be compared
+ * by eye. Do not reintroduce a variable-width bar.
  */
 function limitRow(name, win, sourceText, valueHint, ctx) {
   const { width, now, compact } = ctx;
@@ -325,30 +318,16 @@ function limitRow(name, win, sourceText, valueHint, ctx) {
     tail = 'no data';
   }
 
-  // Side-by-side needs: 2 indent + bar + 2 gap + meta. Work out the bar width
-  // that leaves room for the whole meta string, and stack if that's too thin.
-  const sideBarW = Math.min(46, width - 2 - 2 - visibleWidth(tail));
-  const stackMeta = sideBarW < MIN_SIDE_BAR;
-
-  // Stacked: keep the % next to its label instead of flinging it to the far
-  // edge — a 40-col gap between "Weekly window" and "17%" is hard to read.
-  const nameW = stackMeta
-    ? Math.min(26, Math.max(12, width - 10))
-    : Math.min(24, Math.max(14, Math.floor(width * 0.24)));
-
+  // Keep the % close to its label rather than flung to the far edge — a wide
+  // gap between "Weekly window" and "17%" is hard to associate.
+  const nameW = Math.min(26, Math.max(12, width - 10));
   const pctLabel = pct == null ? dim('—') : paint(severityTuple(pct), `${Math.round(pct)}%`);
   out.push(truncate(`  ${padEnd(bold(name), nameW)} ${padStart(pctLabel, 5)}`, width));
 
-  const barCells = win
-    ? bar(pct, stackMeta ? Math.max(8, width - 4) : sideBarW, elapsed)
-    : dim('░'.repeat(stackMeta ? Math.max(8, width - 4) : Math.max(10, sideBarW)));
-
-  if (stackMeta) {
-    out.push(`  ${barCells}`);
-    if (tail) out.push(...wrapPlain(tail, width, '  '));
-  } else {
-    out.push(truncate(`  ${barCells}  ${dim(tail)}`, width));
-  }
+  // 2-col indent each side, so the bar is the same length on every row.
+  const barW = Math.max(8, width - 4);
+  out.push(`  ${win ? bar(pct, barW, elapsed) : dim('░'.repeat(barW))}`);
+  if (tail) out.push(...wrapPlain(tail, width, '  '));
 
   if (!compact) out.push('');
   return out;

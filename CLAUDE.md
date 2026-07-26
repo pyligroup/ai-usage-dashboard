@@ -298,14 +298,16 @@ New code must uphold this.
   are braille, two days per cell. Color is truecolor from the same palette as
   `styles.css`, auto-disabled off-TTY and under `NO_COLOR`. All widths clamp
   to 40–120 cols and every line is truncated to fit — no horizontal overflow.
-  - **Responsive stacking** is the terminal analogue of the web stack
-    breakpoint, but it is decided **per row by measured fit, not by a fixed
-    width constant**. `limitRow()` computes the bar width that would leave room
-    for the whole meta string; if that falls below `MIN_SIDE_BAR` it stacks —
-    bar spans the pane, meta wraps beneath via `wrapPlain()` (which breaks on
-    ` · ` field boundaries). A fixed threshold was tried first and was wrong:
-    the bar grows with width, so long-meta rows (Cursor) still truncated at
-    72–90 cols while short-meta rows had room to spare.
+  - **Every bar spans the full content width, on its own line, with the meta
+    text always beneath it.** Uniform bar length is the point of a bar: it is
+    what makes fills comparable at a glance across rows and providers. Nothing
+    else shares a bar's row. Two earlier layouts were wrong and must not come
+    back: (1) meta beside the bar with a fixed width threshold, which still
+    truncated long-meta rows (Cursor) at 72–90 cols; (2) sizing each bar to
+    whatever its meta left over, which made Codex's bar near-full-width and
+    Claude's two-thirds in the same frame — visually incomparable. `limitRow()`
+    now uses a single `barW = width - 4` for every row and wraps the meta via
+    `wrapPlain()` (which breaks on ` · ` field boundaries).
   - **`sectionLabel()` returns an array of lines** (label, then the source hint
     on its own line when both don't fit) — spread it, don't push it.
   - **All width math is in TERMINAL CELLS, not UTF-16 units.** `visibleWidth()`
