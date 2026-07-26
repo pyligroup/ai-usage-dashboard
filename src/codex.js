@@ -29,6 +29,7 @@
 import { promises as fs } from 'node:fs';
 import path from 'node:path';
 import os from 'node:os';
+import { spawn } from 'node:child_process';
 import { readJsonlLines, listFilesRecursive, safeStat } from './util.js';
 
 const CODEX_DIR = process.env.CODEX_HOME || path.join(os.homedir(), '.codex');
@@ -113,6 +114,136 @@ function extractRateLimits(obj) {
   };
 }
 
+// ---------- live layer: codex app-server ----------
+//
+// Codex CLI (>= ~0.145) exposes a first-party JSON-RPC interface over stdio with
+// a documented `account/rateLimits/read` method. We spawn `codex app-server`,
+// ask, and exit. This is NOT the forbidden path: we never touch
+// chatgpt.com/backend-api/wham/usage ourselves and never refresh the OAuth
+// token. Token refresh is a separate, explicit method (`chatgptAuthTokens/
+// refresh`) that we do not call — verified that reads leave ~/.codex/auth.json
+// byte-identical. Reads are account metadata: they create no session or turn and
+// consume no tokens (verified: lifetimeTokens unchanged across repeated reads).
+//
+// Throttled like the other providers so a room full of dashboard clients still
+// spawns at most one subprocess per window.
+const LIVE_MIN_INTERVAL_MS = 180 * 1000;
+const LIVE_TIMEOUT_MS = 10 * 1000;
+let _liveCache = null;
+let _liveCacheAt = 0;
+let _liveLastAttempt = 0;
+
+/** Map an app-server RateLimitWindow onto our normalized shape. */
+function normalizeLiveWindow(win) {
+  if (!win || typeof win.usedPercent !== 'number') return null;
+  return {
+    usedPercent: win.usedPercent,
+    windowMinutes: typeof win.windowDurationMins === 'number' ? win.windowDurationMins : null,
+    // app-server sends unix SECONDS; the rest of the app uses epoch ms.
+    resetsAt: typeof win.resetsAt === 'number' ? win.resetsAt * 1000 : null,
+  };
+}
+
+/**
+ * One JSON-RPC round trip against `codex app-server`.
+ * Resolves null on any failure — the caller falls back to the disk snapshot.
+ */
+function readLiveRateLimits() {
+  return new Promise((resolve) => {
+    let child;
+    let settled = false;
+    const done = (v) => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      try {
+        child?.kill('SIGTERM');
+      } catch {
+        /* already gone */
+      }
+      resolve(v);
+    };
+    const timer = setTimeout(() => done(null), LIVE_TIMEOUT_MS);
+
+    try {
+      child = spawn('codex', ['app-server'], { stdio: ['pipe', 'pipe', 'ignore'] });
+    } catch {
+      return done(null);
+    }
+    child.on('error', () => done(null));
+    child.on('exit', () => done(null)); // exited before answering
+
+    const send = (obj) => {
+      try {
+        child.stdin.write(JSON.stringify(obj) + '\n');
+      } catch {
+        done(null);
+      }
+    };
+
+    let buf = '';
+    child.stdout.on('data', (chunk) => {
+      buf += chunk.toString();
+      let nl;
+      while ((nl = buf.indexOf('\n')) >= 0) {
+        const line = buf.slice(0, nl).trim();
+        buf = buf.slice(nl + 1);
+        if (!line) continue;
+        let msg;
+        try {
+          msg = JSON.parse(line);
+        } catch {
+          continue;
+        }
+        if (msg.id === 1) {
+          send({ jsonrpc: '2.0', method: 'initialized', params: {} });
+          send({ jsonrpc: '2.0', id: 2, method: 'account/rateLimits/read', params: {} });
+        } else if (msg.id === 2) {
+          if (!msg.result?.rateLimits) return done(null);
+          const rl = msg.result.rateLimits;
+          const { fiveHour, weekly } = classifyWindows(
+            normalizeLiveWindow(rl.primary),
+            normalizeLiveWindow(rl.secondary),
+          );
+          return done({
+            fiveHour: fiveHour || null,
+            weekly: weekly || null,
+            planType: rl.planType ?? null,
+            capturedAt: Date.now(),
+            source: 'live',
+          });
+        }
+      }
+    });
+
+    send({
+      jsonrpc: '2.0',
+      id: 1,
+      method: 'initialize',
+      params: {
+        clientInfo: { name: 'ai-usage-dashboard', title: 'AI Usage Dashboard', version: '1.0.0' },
+      },
+    });
+  });
+}
+
+/** Throttled live read. Returns the cached value between attempts. */
+async function getLiveRateLimits() {
+  const now = Date.now();
+  if (_liveCache && now - _liveCacheAt < LIVE_MIN_INTERVAL_MS) return _liveCache;
+  // Don't retry a failing subprocess on every request either.
+  if (now - _liveLastAttempt < LIVE_MIN_INTERVAL_MS) return _liveCache;
+  _liveLastAttempt = now;
+
+  const live = await readLiveRateLimits();
+  if (live && (live.fiveHour || live.weekly)) {
+    _liveCache = live;
+    _liveCacheAt = now;
+    return live;
+  }
+  return _liveCache; // may be null → caller uses the disk snapshot
+}
+
 // Take fiveHour / weekly from the newest non-null rate_limits only (newest→
 // oldest across files and within each file). Skip `rate_limits: null` and keep
 // walking, but do NOT backfill a missing window from an older snapshot — a
@@ -121,6 +252,17 @@ function extractRateLimits(obj) {
 // window_minutes 300 will populate fiveHour again. `capturedAt` / planType
 // come from that same newest usable snapshot.
 export async function getCodexRateLimits() {
+  // Live layer first: unlike the disk snapshot this reflects `codex exec
+  // --ephemeral` and other runs that never persist a rollout. Falls through to
+  // the snapshot on any failure, so an experimental protocol change degrades
+  // to today's behavior rather than blanking the card.
+  try {
+    const live = await getLiveRateLimits();
+    if (live) return live;
+  } catch {
+    /* fall through to the on-disk snapshot */
+  }
+
   const files = await recentRolloutFiles();
 
   for (const f of files) {
@@ -134,6 +276,7 @@ export async function getCodexRateLimits() {
         weekly: rl.weekly || null,
         planType: rl.planType ?? null,
         capturedAt: rl.capturedAt,
+        source: 'snapshot',
       };
     }
   }
