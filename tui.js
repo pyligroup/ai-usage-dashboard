@@ -18,6 +18,9 @@ import process from 'node:process';
 import { renderDashboard, setColorEnabled, ALL_PROVIDERS } from './src/tui.js';
 
 const REFRESH_MS = 30 * 1000;
+// The server heartbeats every ~10s, so silence this long means the stream is
+// dead even though the socket may still look open.
+const STREAM_STALL_MS = 30 * 1000;
 const PORT = Number(process.env.PORT) || 4317;
 
 // Resolve the host the server is reachable at. Wildcards (0.0.0.0, ::) mean
@@ -81,7 +84,7 @@ const HELP = `
 
     -c, --compact        Bars-only layout (mirrors the web "Compact view")
     -1, --once           Print one frame and exit instead of watching
-        --no-server      Don't auto-start the shared server; read locally
+        --no-server      Don't use or start the shared server; read in-process
         --tools=a,b      Providers to show: claude, codex, cursor
         --interval=SEC   Poll interval when not streaming (default 30)
         --color          Force ANSI color   --no-color   Disable it
@@ -93,8 +96,9 @@ const HELP = `
   and pushes one frame to all connected panes, so multiple terminals show the
   same numbers at the same instant instead of drifting on separate timers.
   The first TUI starts that server if it isn't already running (it keeps
-  running after this pane exits, serving the others; \`--no-server\` opts out
-  and reads local files in this process instead).
+  running after this pane exits, serving the others). \`--no-server\` makes this
+  pane self-contained: it neither uses nor starts the shared server and reads
+  providers in-process, so it does not share their caches or throttles.
 `;
 
 const opts = parseArgs(process.argv.slice(2));
@@ -149,6 +153,14 @@ async function fetchDirect() {
 }
 
 async function getUsage() {
+  // --no-server means "this process does its own reading" — so don't quietly
+  // use a server that happens to be listening. The flag exists so a pane can be
+  // strictly self-contained; silently joining a shared server would contradict
+  // both the help text and the reason someone reaches for it.
+  if (opts.noServer) {
+    const payload = await fetchDirect();
+    return { payload, source: 'reading local files directly (--no-server)' };
+  }
   try {
     const payload = await fetchFromServer();
     // Server-backed: this TUI shares the server's ~15s aggregate cache and its
@@ -167,6 +179,8 @@ async function getUsage() {
 // Set once teardown starts, so the stream's reconnect loop and any in-flight
 // retry stop rescheduling. Declared here because connectStream() below reads it.
 let exiting = false;
+// Poll-fallback timer; also read by startPollFallback() below.
+let refreshTimer = null;
 
 // ---------- shared server lifecycle ----------
 async function serverIsUp() {
@@ -230,6 +244,10 @@ async function ensureServer() {
 // different sides of the cache boundary and disagree.
 let streamAbort = null;
 let streamRetryTimer = null;
+// When the last stream frame landed. A stream that goes quiet without the
+// socket erroring (server wedged, connection half-open) looks identical to a
+// healthy one from here, so we watch the clock rather than trusting an event.
+let lastFrameAt = 0;
 
 function stopStream() {
   if (streamAbort) {
@@ -242,12 +260,14 @@ function stopStream() {
   }
 }
 
-function scheduleStreamRetry(onFrame, delayMs) {
+function scheduleStreamRetry(onFrame, delayMs, attempt = 0) {
   if (exiting) return;
   if (streamRetryTimer) clearTimeout(streamRetryTimer);
   streamRetryTimer = setTimeout(() => {
     streamRetryTimer = null;
-    connectStream(onFrame).catch(() => {});
+    // Carry the attempt count so repeated failures actually back off instead of
+    // hammering a dead server once per second forever.
+    connectStream(onFrame, attempt + 1).catch(() => {});
   }, delayMs);
 }
 
@@ -269,10 +289,13 @@ async function connectStream(onFrame, attempt = 0) {
       headers: { Accept: 'text/event-stream' },
     });
     if (!res.ok || !res.body) throw new Error('HTTP ' + res.status);
+    // Arm the stall watchdog now: a stream that connects then wedges before
+    // sending frame #1 would otherwise never be detected.
+    lastFrameAt = Date.now();
   } catch {
     // Server down or restarting — back off, then try again. Capped so a long
     // outage doesn't spin, and the poll fallback keeps the pane alive meanwhile.
-    scheduleStreamRetry(onFrame, Math.min(30000, 1000 * 2 ** Math.min(attempt, 5)));
+    scheduleStreamRetry(onFrame, Math.min(30000, 1000 * 2 ** Math.min(attempt, 5)), attempt);
     return false;
   }
 
@@ -283,6 +306,9 @@ async function connectStream(onFrame, attempt = 0) {
     let buf = '';
     try {
       for await (const chunk of res.body) {
+        // Any bytes mean the connection is alive — including heartbeat
+        // comment lines, which carry no frame but prove liveness.
+        lastFrameAt = Date.now();
         buf += decoder.decode(chunk, { stream: true });
         // SSE frames are separated by a blank line.
         let sep;
@@ -308,12 +334,37 @@ async function connectStream(onFrame, attempt = 0) {
     } catch {
       /* stream ended or aborted — handled below */
     }
+    // Only the CURRENT stream's reader may react; a superseded one must not.
+    // Note this check must happen before any reconnect runs, since connectStream
+    // reassigns streamAbort — that race previously swallowed the fallback.
     if (!exiting && streamAbort === ctrl) {
-      scheduleStreamRetry(onFrame, 1000);
+      // The server went away mid-stream. Resume polling so the pane keeps
+      // updating instead of freezing on the last frame with the countdown
+      // stuck at "refreshing…". applyFrame() stops polling if the stream
+      // comes back.
+      startPollFallback();
+      scheduleStreamRetry(onFrame, Math.min(30000, 1000 * 2 ** Math.min(attempt, 5)), attempt);
     }
   })();
 
   return true;
+}
+
+// ---------- poll fallback ----------
+// Used when the stream isn't available: at startup (no server / --no-server) and
+// after a live stream drops. Stopped again as soon as a stream frame arrives, so
+// a reconnected pane goes back to the shared cadence rather than double-fetching.
+function startPollFallback() {
+  if (refreshTimer || exiting) return;
+  refresh();
+  refreshTimer = setInterval(refresh, opts.interval);
+}
+
+function stopPollFallback() {
+  if (refreshTimer) {
+    clearInterval(refreshTimer);
+    refreshTimer = null;
+  }
 }
 
 // ---------- terminal ----------
@@ -378,6 +429,9 @@ async function refresh() {
  * every pane's countdown matches its cadence rather than each running its own.
  */
 function applyFrame(frame) {
+  // Stream is healthy — drop any poll fallback started during an outage.
+  lastFrameAt = Date.now();
+  stopPollFallback();
   state.payload = frame;
   state.error = false;
   state.nextRefreshAt = frame.nextRefreshAt || Date.now() + opts.interval;
@@ -387,14 +441,15 @@ function applyFrame(frame) {
   draw();
 }
 
-let refreshTimer = null;
 let tickTimer = null;
+let watchdogTimer = null;
 
 function cleanup() {
   if (exiting) return;
   exiting = true;
   clearInterval(refreshTimer);
   clearInterval(tickTimer);
+  clearInterval(watchdogTimer);
   // Drop the SSE subscription so the server can stop its broadcast timer once
   // the last pane goes away.
   stopStream();
@@ -454,14 +509,35 @@ async function main() {
   // (--no-server, or a start that failed).
   const streamed = !opts.noServer && (await connectStream(applyFrame));
 
-  if (!streamed) {
-    await refresh();
-    refreshTimer = setInterval(refresh, opts.interval);
-  }
+  // No stream (--no-server, or the connect failed): poll instead. If a stream
+  // later drops, connectStream's reader turns polling back on by itself.
+  if (!streamed) startPollFallback();
 
   // Repaint every second so the countdown and reset timers stay live between
   // frames — the same cadence as the web countdown.
   tickTimer = setInterval(draw, 1000);
+
+  // Stream watchdog. The server pushes every STREAM_INTERVAL (30s); if we go
+  // appreciably longer than that without a frame, treat the stream as dead and
+  // poll instead. This covers the cases an end-of-stream event misses: a
+  // half-open socket, a wedged server, or a reader that never unblocks.
+  // applyFrame() cancels the fallback as soon as frames resume.
+  watchdogTimer = setInterval(() => {
+    if (exiting || opts.noServer) return;
+    if (!lastFrameAt || Date.now() - lastFrameAt <= STREAM_STALL_MS) return;
+    // Half-open socket: the connection is up but nothing is arriving and no
+    // error will ever fire (wedged server, laptop sleep/resume). Polling alone
+    // isn't enough — without tearing the dead stream down the pane would poll
+    // on its own timer forever and never rejoin the shared broadcast, which is
+    // the cross-pane drift this whole branch exists to remove.
+    lastFrameAt = 0; // don't re-fire every tick while reconnecting
+    startPollFallback();
+    // connectStream() calls stopStream(), which aborts the parked reader; that
+    // reader's `streamAbort === ctrl` guard then sees itself superseded and
+    // stays quiet. On success applyFrame() cancels polling; on failure the
+    // existing backoff retry keeps trying until the server returns.
+    connectStream(applyFrame).catch(() => {});
+  }, 5000);
 }
 
 main().catch((err) => {

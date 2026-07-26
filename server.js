@@ -77,9 +77,16 @@ async function buildUsage() {
 // /api/usage stays a plain poll endpoint for the browser and macOS clients;
 // this is purely additive.
 const STREAM_INTERVAL_MS = 30 * 1000;
+// Heartbeat between broadcasts. SSE comment lines (": ...") carry no data and
+// are ignored by the client parser, but they prove the connection is alive —
+// which is the only way a client can tell a healthy idle stream from a
+// half-open socket that will never error. Also prunes dead subscribers early,
+// since a failed write is what reveals them.
+const STREAM_HEARTBEAT_MS = 10 * 1000;
 /** @type {Set<{res: import('node:http').ServerResponse}>} */
 const subscribers = new Set();
 let streamTimer = null;
+let heartbeatTimer = null;
 let _lastFrame = null;
 
 function frameFor(payload) {
@@ -120,17 +127,37 @@ async function broadcast() {
 // The broadcast timer only runs while someone is listening — an idle dashboard
 // server shouldn't be scanning the filesystem or hitting live endpoints.
 function ensureStreamTimer() {
-  if (streamTimer || !subscribers.size) return;
-  streamTimer = setInterval(() => {
-    broadcast().catch(() => {});
-  }, STREAM_INTERVAL_MS);
-  if (streamTimer.unref) streamTimer.unref();
+  if (!subscribers.size) return;
+  if (!streamTimer) {
+    streamTimer = setInterval(() => {
+      broadcast().catch(() => {});
+    }, STREAM_INTERVAL_MS);
+    if (streamTimer.unref) streamTimer.unref();
+  }
+  if (!heartbeatTimer) {
+    heartbeatTimer = setInterval(() => {
+      for (const sub of subscribers) {
+        try {
+          sub.res.write(': hb\n\n');
+        } catch {
+          subscribers.delete(sub);
+        }
+      }
+      stopStreamTimerIfIdle();
+    }, STREAM_HEARTBEAT_MS);
+    if (heartbeatTimer.unref) heartbeatTimer.unref();
+  }
 }
 
 function stopStreamTimerIfIdle() {
-  if (streamTimer && !subscribers.size) {
+  if (subscribers.size) return;
+  if (streamTimer) {
     clearInterval(streamTimer);
     streamTimer = null;
+  }
+  if (heartbeatTimer) {
+    clearInterval(heartbeatTimer);
+    heartbeatTimer = null;
   }
 }
 
