@@ -98,6 +98,25 @@ and `macos/` all render the same `/api/usage` payload. A labeling change is only
 half-done if it lands in one of them — the whole point is that the terminal view
 and the browser never disagree about what a number means.
 
+**The server is the terminal UIs' single source of truth.** `GET /api/usage/stream`
+(SSE) pushes one frame to every subscribed pane on ONE server-owned 30s cadence.
+The TUI subscribes instead of polling, and auto-starts a detached server when
+none is listening (`--no-server` opts out). Why it matters:
+
+- Independent 30s timers let two panes started 12s apart land on opposite sides
+  of the 15s aggregate cache and show different numbers. One broadcast makes
+  every pane repaint from identical bytes at the same instant — countdowns
+  included (the frame carries `nextRefreshAt`).
+- It matters more once Codex fetches live: one shared process means one
+  `codex app-server` subprocess per throttle window for all panes, instead of
+  one per pane on unsynchronized timers.
+
+The broadcast timer only runs while a subscriber is connected, so an idle server
+does no provider work. A joining pane gets a cached frame immediately. The stream
+is additive — `/api/usage` is unchanged, so web/SwiftBar/Übersicht are untouched.
+Any new terminal consumer should subscribe to the stream, not poll and not import
+the providers.
+
 **Caching is per-process, so the server is the shared cache.** Both throttle
 layers — `server.js`'s ~15s aggregate cache and the `MIN_ENDPOINT_INTERVAL_MS`
 (180s) live-endpoint throttles inside `src/claude.js` / `src/cursor.js` — are

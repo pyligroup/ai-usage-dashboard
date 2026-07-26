@@ -149,18 +149,25 @@ it means you're ahead of pace.
 
 #### Running more than one
 
-Start the server first:
+Just open more panes — they stay in sync automatically:
 
 ```bash
-npm start          # then run as many TUIs as you like
+npm run tui        # first pane starts the shared server if it isn't running
+npm run tui        # every other pane subscribes to it
 ```
 
-Every TUI (and the browser, and the macOS clients) then shares that one
-server's ~15s cache, so the live Claude/Cursor endpoints get called **once for
-everybody**. Without a server each instance polls independently — measured
-here at ~4.2s per refresh versus ~0.07s server-backed, and each one counts
-separately against the providers' rate limits. The footer tells you which mode
-you're in (`shared cache` vs `reading local files directly`).
+One server owns every provider call and pushes the same frame to all connected
+panes on a single cadence, so they show identical numbers and identical
+countdowns rather than drifting on separate timers. It keeps running after a
+pane exits (serving the others); `--no-server` opts out and reads local files
+in that process instead.
+
+The browser and macOS clients share that same server (they poll
+`/api/usage`), so the live Claude/Cursor endpoints get called **once for
+everybody**. A pane running with `--no-server` reads local files in its own
+process instead — measured at ~4.2s per refresh versus ~0.07s server-backed,
+and it counts separately against the providers' rate limits. The footer always
+says which mode you're in.
 
 ### Install as a standalone window (Chrome)
 

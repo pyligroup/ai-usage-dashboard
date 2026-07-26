@@ -42,10 +42,18 @@ const SERVER_URL = `http://${hostForUrl(HOST)}:${PORT}/api/usage`;
 
 // ---------- args ----------
 function parseArgs(argv) {
-  const opts = { compact: false, once: false, tools: ALL_PROVIDERS.slice(), color: null, interval: REFRESH_MS };
+  const opts = {
+    compact: false,
+    once: false,
+    noServer: false,
+    tools: ALL_PROVIDERS.slice(),
+    color: null,
+    interval: REFRESH_MS,
+  };
   for (const arg of argv) {
     if (arg === '--compact' || arg === '-c') opts.compact = true;
     else if (arg === '--once' || arg === '-1' || arg === '--no-watch') opts.once = true;
+    else if (arg === '--no-server') opts.noServer = true;
     else if (arg === '--no-color') opts.color = false;
     else if (arg === '--color') opts.color = true;
     else if (arg.startsWith('--tools=')) {
@@ -73,19 +81,20 @@ const HELP = `
 
     -c, --compact        Bars-only layout (mirrors the web "Compact view")
     -1, --once           Print one frame and exit instead of watching
+        --no-server      Don't auto-start the shared server; read locally
         --tools=a,b      Providers to show: claude, codex, cursor
-        --interval=SEC   Refresh interval when watching (default 30)
+        --interval=SEC   Poll interval when not streaming (default 30)
         --color          Force ANSI color   --no-color   Disable it
     -h, --help           This message
 
   While watching:  q / Ctrl-C quit  ·  r refresh now  ·  c toggle compact
 
-  Reads a running dashboard server at ${SERVER_URL} when available,
-  otherwise loads the same provider modules directly.
-
-  Running several of these at once? Start \`npm start\` first. Every TUI then
-  shares that one server's cache — cheap, and the live Claude/Cursor endpoints
-  get hit once for everybody instead of once per instance.
+  Shared source of truth: a single dashboard server owns every provider call
+  and pushes one frame to all connected panes, so multiple terminals show the
+  same numbers at the same instant instead of drifting on separate timers.
+  The first TUI starts that server if it isn't already running (it keeps
+  running after this pane exits, serving the others; \`--no-server\` opts out
+  and reads local files in this process instead).
 `;
 
 const opts = parseArgs(process.argv.slice(2));
@@ -155,6 +164,158 @@ async function getUsage() {
   }
 }
 
+// Set once teardown starts, so the stream's reconnect loop and any in-flight
+// retry stop rescheduling. Declared here because connectStream() below reads it.
+let exiting = false;
+
+// ---------- shared server lifecycle ----------
+async function serverIsUp() {
+  const ctrl = new AbortController();
+  const timer = setTimeout(() => ctrl.abort(), 1500);
+  try {
+    const res = await fetch(`http://${hostForUrl(HOST)}:${PORT}/api/health`, {
+      cache: 'no-store',
+      signal: ctrl.signal,
+    });
+    return res.ok;
+  } catch {
+    return false;
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+/**
+ * Start the shared dashboard server if nothing is listening yet.
+ *
+ * The server is the single source of truth: it owns every provider call, the
+ * caches, and the one broadcast cadence all panes render from. Auto-starting it
+ * means the first TUI you open bootstraps the shared process and the rest just
+ * subscribe — rather than each pane fetching independently on its own timer.
+ *
+ * Detached + unref'd so it survives this pane and keeps serving the others.
+ * That is a process outliving its terminal, so we say so in the footer and
+ * `--no-server` opts out entirely.
+ *
+ * @returns {Promise<'already-running'|'started'|'failed'|'skipped'>}
+ */
+async function ensureServer() {
+  if (opts.noServer) return 'skipped';
+  if (await serverIsUp()) return 'already-running';
+
+  try {
+    const { spawn } = await import('node:child_process');
+    const serverPath = new URL('./server.js', import.meta.url).pathname;
+    const child = spawn(process.execPath, [serverPath], {
+      detached: true,
+      stdio: 'ignore',
+      env: { ...process.env, PORT: String(PORT), HOST },
+    });
+    child.unref();
+  } catch {
+    return 'failed';
+  }
+
+  // Wait for it to accept connections rather than assuming it's ready.
+  for (let i = 0; i < 40; i++) {
+    if (await serverIsUp()) return 'started';
+    await new Promise((r) => setTimeout(r, 250));
+  }
+  return 'failed';
+}
+
+// ---------- usage stream (SSE) ----------
+// Subscribe to the server's shared broadcast instead of polling. Every pane
+// receives the same frame at the same instant, so panes can't drift onto
+// different sides of the cache boundary and disagree.
+let streamAbort = null;
+let streamRetryTimer = null;
+
+function stopStream() {
+  if (streamAbort) {
+    streamAbort.abort();
+    streamAbort = null;
+  }
+  if (streamRetryTimer) {
+    clearTimeout(streamRetryTimer);
+    streamRetryTimer = null;
+  }
+}
+
+function scheduleStreamRetry(onFrame, delayMs) {
+  if (exiting) return;
+  if (streamRetryTimer) clearTimeout(streamRetryTimer);
+  streamRetryTimer = setTimeout(() => {
+    streamRetryTimer = null;
+    connectStream(onFrame).catch(() => {});
+  }, delayMs);
+}
+
+/**
+ * Open the SSE stream and invoke onFrame(payload) for each pushed frame.
+ * Resolves once connected; reconnects with backoff if the server goes away.
+ */
+async function connectStream(onFrame, attempt = 0) {
+  if (exiting) return false;
+  stopStream();
+  const ctrl = new AbortController();
+  streamAbort = ctrl;
+
+  let res;
+  try {
+    res = await fetch(`http://${hostForUrl(HOST)}:${PORT}/api/usage/stream`, {
+      cache: 'no-store',
+      signal: ctrl.signal,
+      headers: { Accept: 'text/event-stream' },
+    });
+    if (!res.ok || !res.body) throw new Error('HTTP ' + res.status);
+  } catch {
+    // Server down or restarting — back off, then try again. Capped so a long
+    // outage doesn't spin, and the poll fallback keeps the pane alive meanwhile.
+    scheduleStreamRetry(onFrame, Math.min(30000, 1000 * 2 ** Math.min(attempt, 5)));
+    return false;
+  }
+
+  // Consume the event stream in the background; this function's job is done
+  // once the connection is open.
+  (async () => {
+    const decoder = new TextDecoder();
+    let buf = '';
+    try {
+      for await (const chunk of res.body) {
+        buf += decoder.decode(chunk, { stream: true });
+        // SSE frames are separated by a blank line.
+        let sep;
+        while ((sep = buf.indexOf('\n\n')) >= 0) {
+          const raw = buf.slice(0, sep);
+          buf = buf.slice(sep + 2);
+          let event = 'message';
+          const dataLines = [];
+          for (const line of raw.split('\n')) {
+            if (line.startsWith('event:')) event = line.slice(6).trim();
+            else if (line.startsWith('data:')) dataLines.push(line.slice(5).trim());
+            // ':' comment lines (keep-alive) are ignored.
+          }
+          if (!dataLines.length) continue;
+          try {
+            const data = JSON.parse(dataLines.join('\n'));
+            if (event === 'usage') onFrame(data);
+          } catch {
+            /* ignore malformed frame; the next one will arrive */
+          }
+        }
+      }
+    } catch {
+      /* stream ended or aborted — handled below */
+    }
+    if (!exiting && streamAbort === ctrl) {
+      scheduleStreamRetry(onFrame, 1000);
+    }
+  })();
+
+  return true;
+}
+
 // ---------- terminal ----------
 const ALT_ON = '\x1b[?1049h';
 const ALT_OFF = '\x1b[?1049l';
@@ -169,7 +330,14 @@ function termWidth() {
   return process.stdout.columns || 100;
 }
 
-let state = { payload: null, source: null, error: false, nextRefreshAt: 0, compact: opts.compact };
+let state = {
+  payload: null,
+  source: null,
+  error: false,
+  nextRefreshAt: 0,
+  compact: opts.compact,
+  serverStartedByUs: false,
+};
 
 function draw() {
   const lines = renderDashboard(state.payload, {
@@ -205,15 +373,31 @@ async function refresh() {
   draw();
 }
 
+/**
+ * Apply a frame pushed by the shared server. The server sends nextRefreshAt so
+ * every pane's countdown matches its cadence rather than each running its own.
+ */
+function applyFrame(frame) {
+  state.payload = frame;
+  state.error = false;
+  state.nextRefreshAt = frame.nextRefreshAt || Date.now() + opts.interval;
+  state.source = state.serverStartedByUs
+    ? `via ${HOST}:${PORT} · shared stream (started here)`
+    : `via ${HOST}:${PORT} · shared stream`;
+  draw();
+}
+
 let refreshTimer = null;
 let tickTimer = null;
-let exiting = false;
 
 function cleanup() {
   if (exiting) return;
   exiting = true;
   clearInterval(refreshTimer);
   clearInterval(tickTimer);
+  // Drop the SSE subscription so the server can stop its broadcast timer once
+  // the last pane goes away.
+  stopStream();
   if (watching) {
     if (process.stdin.isTTY) process.stdin.setRawMode(false);
     process.stdin.pause();
@@ -231,10 +415,16 @@ for (const sig of ['SIGINT', 'SIGTERM', 'SIGHUP']) {
 
 async function main() {
   if (!watching) {
+    // One-shot: don't start a background server for a single frame — use
+    // whatever is already running, else read locally.
     await refresh();
-    // --once (or piped output): one frame, then exit with the connection status.
     process.exit(state.error ? 1 : 0);
   }
+
+  // Bootstrap the shared source of truth before painting, so the first frame
+  // already comes from the server rather than this process.
+  const serverState = await ensureServer();
+  state.serverStartedByUs = serverState === 'started';
 
   process.stdout.write(ALT_ON + CURSOR_HIDE);
 
@@ -257,12 +447,20 @@ async function main() {
 
   process.stdout.on('resize', draw);
 
-  draw(); // paint the header immediately; data lands on the first refresh
-  await refresh();
+  draw(); // paint the header immediately; data lands on the first frame
 
-  refreshTimer = setInterval(refresh, opts.interval);
+  // Prefer the shared stream: one server owns the fetching, every pane renders
+  // the same pushed frame. Polling stays as the fallback when there's no server
+  // (--no-server, or a start that failed).
+  const streamed = !opts.noServer && (await connectStream(applyFrame));
+
+  if (!streamed) {
+    await refresh();
+    refreshTimer = setInterval(refresh, opts.interval);
+  }
+
   // Repaint every second so the countdown and reset timers stay live between
-  // fetches — the same cadence as the web countdown.
+  // frames — the same cadence as the web countdown.
   tickTimer = setInterval(draw, 1000);
 }
 
