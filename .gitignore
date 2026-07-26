@@ -4,3 +4,17 @@ node_modules/
 
 # local prompt-staging (dvx-prompt-output)
 .prompts/
+
+# machine-local agent/editor state — contains absolute home paths
+.claude/settings.local.json
+.conductor/
+
+# credentials & captured provider data must never be committed; this repo reads
+# real tokens from the OS keychain / local CLI state at runtime and nothing it
+# touches belongs in git
+.env
+.env.*
+*.vscdb
+*.sqlite
+*.sqlite3
+*.pem

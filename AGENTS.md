@@ -29,6 +29,8 @@ trends — so multiple tools' limits can be watched in one window.
 ```bash
 npm start          # node server.js  → http://127.0.0.1:4317
 npm run dev        # node --watch server.js (restarts on change)
+npm run tui        # node tui.js — terminal view (watch mode; q/Ctrl-C quits)
+npm run tui -- --once --no-color   # one plain-text frame (handy for diffing)
 ```
 
 There is **no test suite, no linter, and no typecheck** configured. "Verify" here
@@ -50,6 +52,17 @@ src/codex.js         Codex data logic (local rollout files only — no network).
 src/cursor.js        Cursor data logic (live cursor.com dashboard API + local
                      state.vscdb membership metadata).
 src/util.js          Shared fs helpers (recursive listing, JSONL parsing).
+src/tui.js           Terminal renderer. Pure formatting: takes the same
+                     normalized `providers` payload the browser gets and returns
+                     ANSI-styled lines. No I/O, no tty access, no provider logic.
+                     Mirrors public/app.js section-for-section — same labels,
+                     captions, provenance chips, and honesty rules. When you
+                     change a label in app.js, change it here too.
+tui.js               Terminal entry point. Owns argv, the tty (alt-screen, raw
+                     mode, resize), and the refresh loop. Fetches /api/usage
+                     when a server is listening, else calls the src/ providers
+                     directly with the same per-provider error containment as
+                     server.js. Adds no provider logic of its own.
 public/index.html    Markup: header, settings modal, provider cards.
 public/styles.css    All styling. Dark/light via prefers-color-scheme +
                      optional cookie override (`data-theme`). Default layout:
@@ -76,9 +89,31 @@ macos/               Optional macOS clients (Übersicht desktop widget + SwiftBa
 ```
 
 **Design rule:** all fragile / provider-specific logic lives in `src/`. The server
-is a thin shell; the frontend and macOS clients only consume the normalized JSON.
-Keep it that way — if an endpoint schema drifts, there should be exactly one file
-to fix per provider. Do not duplicate Claude/Codex/Cursor fetches in `macos/`.
+is a thin shell; the frontend, terminal view, and macOS clients only consume the
+normalized JSON. Keep it that way — if an endpoint schema drifts, there should be
+exactly one file to fix per provider. Do not duplicate Claude/Codex/Cursor fetches
+in `macos/`, `tui.js`, or `src/tui.js`.
+
+**Three renderers, one contract:** `public/app.js` (web), `src/tui.js` (terminal),
+and `macos/` all render the same `/api/usage` payload. A labeling change is only
+half-done if it lands in one of them — the whole point is that the terminal view
+and the browser never disagree about what a number means.
+
+**Caching is per-process, so the server is the shared cache.** Both throttle
+layers — `server.js`'s ~15s aggregate cache and the `MIN_ENDPOINT_INTERVAL_MS`
+(180s) live-endpoint throttles inside `src/claude.js` / `src/cursor.js` — are
+module-level state. They coordinate clients *of one process*, not across
+processes. Consequences:
+
+- Clients hitting `/api/usage` (browser tabs, any number of TUIs, SwiftBar,
+  Übersicht) all share one cache and one set of live calls. Cheap: ~0.07s.
+- Each TUI running **without** a server is its own process with its own caches,
+  so N instances mean N filesystem scans and N sets of live endpoint calls
+  against the providers' rate limits. Measured ~4.2s per refresh.
+
+`tui.js` prefers the server for exactly this reason and labels which mode it's
+in. If you ever add another consumer, route it through `/api/usage` rather than
+importing the providers directly — otherwise it silently multiplies live calls.
 
 ## Where the data comes from (READ THIS before touching data logic)
 
@@ -256,6 +291,47 @@ New code must uphold this.
   bars only**. Hide token stats, cost notes, sparklines, by-model, and
   accordion chrome. Keep provider identity + live/snapshot chips and honest
   bar labels. Not a wallboard of full dual-panel cards.
+- **Terminal view** (`npm run tui`, `src/tui.js`): renders the same cards as
+  ANSI text. Full detail by default; `--compact` mirrors the web Compact view
+  (bars only). `--tools=` mirrors the `ai_usage_tools` cookie and, like it,
+  falls back to all providers rather than rendering nothing. Bars are
+  `█`/`░` with a `┃` pace marker (the web bar's `.bar-pace` line); sparklines
+  are braille, two days per cell. Color is truecolor from the same palette as
+  `styles.css`, auto-disabled off-TTY and under `NO_COLOR`. All widths clamp
+  to 40–120 cols and every line is truncated to fit — no horizontal overflow.
+  - **Every bar spans the full content width, on its own line, with the meta
+    text always beneath it.** Uniform bar length is the point of a bar: it is
+    what makes fills comparable at a glance across rows and providers. Nothing
+    else shares a bar's row. Two earlier layouts were wrong and must not come
+    back: (1) meta beside the bar with a fixed width threshold, which still
+    truncated long-meta rows (Cursor) at 72–90 cols; (2) sizing each bar to
+    whatever its meta left over, which made Codex's bar near-full-width and
+    Claude's two-thirds in the same frame — visually incomparable. `limitRow()`
+    now uses a single `barW = width - 4` for every row and wraps the meta via
+    `wrapPlain()` (which breaks on ` · ` field boundaries).
+  - **`sectionLabel()` returns an array of lines** (label, then the source hint
+    on its own line when both don't fit) — spread it, don't push it.
+  - **All width math is in TERMINAL CELLS, not UTF-16 units.** `visibleWidth()`
+    counts CJK / Hangul / fullwidth / emoji as 2 and combining marks / ZWJ /
+    variation selectors as 0; `truncate()` and `sliceCells()` walk code points so
+    they can't split a surrogate pair. Provider labels (model names, API scoped
+    labels) are untrusted input — counting `.length` under-measured them and let
+    lines wrap, breaking the layout. Any new wrapping/slicing helper must use
+    `sliceCells()`, never `String.slice()` against a cell budget.
+    Known limitation, deliberately accepted: measurement is code-point aware but
+    not grapheme-cluster aware, so a ZWJ emoji sequence (👨‍👩‍👧‍👦) over-measures.
+    That wraps early rather than overflowing — cosmetic, not a layout break —
+    and fixing it needs `Intl.Segmenter` plus per-cluster width rules. Not worth
+    the complexity while observed provider labels are ASCII.
+  - **The server URL must handle IPv6.** `server.js` accepts `HOST=::`, so
+    `tui.js` maps wildcards (`0.0.0.0`, `::`) to loopback and brackets IPv6
+    literals (`::1` → `[::1]`) — an unbracketed literal makes `new URL()` throw
+    and silently drops the TUI to slow direct reads.
+  - **Never truncate a number, a unit, a reset time, or a provenance chip.**
+    Those carry the meaning. When space is tight, stack or wrap; only long
+    *model names* in "By model" may be elided. The Claude cost line always
+    keeps "hypothetical" — a bare dollar figure reads like a bill, which is
+    precisely the mislabeling this project exists to avoid.
 - Claude / Codex cards: **5-hour** + **weekly**. May also show Claude
   **Weekly (Opus)** when `opusWeekly` is present, plus any **scoped** windows
   from `rateLimits.scoped` (labels from the API, e.g. "Weekly (Fable)").
@@ -307,6 +383,14 @@ There is no CI to lean on. Before saying a change works:
    raw files / API response (a throwaway Python/node script) and confirm it matches
    what the dashboard shows.
 4. Check the browser console for errors.
+5. If you touched the terminal view, run `npm run tui -- --once --no-color` and
+   confirm it matches the browser's numbers and labels. Then sweep widths
+   (40→130, compact and full, color on and off) asserting two things: no line
+   exceeds the width, and no bar / number / reset time / chip contains an
+   ellipsis. Both regressed during development and neither is visible from a
+   single-width eyeball check. Verify watch mode restores the terminal on both
+   `q` and `Ctrl-C` (alt-screen off, cursor back); a TUI that leaves the
+   cursor hidden is a broken TUI.
 
 ## Conventions
 

@@ -6,7 +6,9 @@
   "main": "server.js",
   "scripts": {
     "start": "node server.js",
-    "dev": "node --watch server.js"
+    "dev": "node --watch server.js",
+    "tui": "node tui.js",
+    "tui:compact": "node tui.js --compact"
   },
   "engines": {
     "node": ">=20"

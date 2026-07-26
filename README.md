@@ -101,6 +101,67 @@ npm run dev        # same, restarts on file changes
 
 Leave it pinned in a narrow browser window on the side. It refreshes every 30s.
 
+### Terminal view
+
+Prefer to keep it in a terminal split? `npm run tui` renders the same data as
+the web dashboard — same numbers, same labels, same provenance chips — as a
+live-refreshing ANSI view.
+
+```bash
+npm run tui                      # full detail, refreshes every 30s
+npm run tui:compact              # bars-only, for a narrow split
+npm run tui -- --once            # print one frame and exit (pipeable)
+npm run tui -- --tools=claude,cursor
+npm run tui -- --help
+```
+
+While watching: `q` / `Ctrl-C` quit · `r` refresh now · `c` toggle compact.
+
+Color follows the TTY and honors `NO_COLOR` — piping to a file or another
+command gives you plain text automatically. In an interactive terminal `--once`
+still prints in color; add `--no-color` when you want plain text there too.
+
+#### Uniform bars, and it collapses horizontally
+
+Every bar spans the full width on its own line, with its supporting text
+beneath. Nothing shares a row with a bar — that's what lets you compare fills
+between rows and providers at a glance:
+
+```
+  Weekly window                18%
+  █████████████████░░░░░░░░░░░░░░░░░░░░┃░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░
+  resets in 4d 7h · 38% elapsed · live
+
+  Usage credits                88%
+  ████████████████████████████████████████████████████████░░░░░░░░░░░░
+  $88.28 of $100.00 · $11.72 left · live
+```
+
+Narrow the pane and the bars shrink together, staying equal, while the text
+wraps instead of being cut to `82% e…`. Section labels, the cost note, and the
+footer wrap the same way. Fully readable down to **40 columns**; only long model
+names in *By model* are elided. Bars, percentages, reset times, and captions are
+never truncated.
+
+The `┃` mark on each bar is the pace marker — where you are in the window's
+elapsed time. Fill to the left of it means you're pacing under the clock; past
+it means you're ahead of pace.
+
+#### Running more than one
+
+Start the server first:
+
+```bash
+npm start          # then run as many TUIs as you like
+```
+
+Every TUI (and the browser, and the macOS clients) then shares that one
+server's ~15s cache, so the live Claude/Cursor endpoints get called **once for
+everybody**. Without a server each instance polls independently — measured
+here at ~4.2s per refresh versus ~0.07s server-backed, and each one counts
+separately against the providers' rate limits. The footer tells you which mode
+you're in (`shared cache` vs `reading local files directly`).
+
 ### Install as a standalone window (Chrome)
 
 The dashboard ships a [web app manifest](./public/manifest.webmanifest) and
