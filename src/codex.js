@@ -132,6 +132,7 @@ const LIVE_TIMEOUT_MS = 10 * 1000;
 let _liveCache = null;
 let _liveCacheAt = 0;
 let _liveLastAttempt = 0;
+let _liveInflight = null;
 
 /** Map an app-server RateLimitWindow onto our normalized shape. */
 function normalizeLiveWindow(win) {
@@ -227,21 +228,39 @@ function readLiveRateLimits() {
   });
 }
 
-/** Throttled live read. Returns the cached value between attempts. */
+/**
+ * Throttled live read. Returns the cached value between attempts.
+ *
+ * Concurrent callers share one in-flight read. Without this, a second caller
+ * arriving while the first is still spawning saw "an attempt just happened",
+ * got the still-null cache, and silently fell back to the disk snapshot — so
+ * two simultaneous reads could report different `source` values for the same
+ * moment. server.js coalesces /api/usage, but this module must hold the
+ * guarantee on its own for any other caller.
+ */
 async function getLiveRateLimits() {
   const now = Date.now();
   if (_liveCache && now - _liveCacheAt < LIVE_MIN_INTERVAL_MS) return _liveCache;
+  if (_liveInflight) return _liveInflight;
   // Don't retry a failing subprocess on every request either.
   if (now - _liveLastAttempt < LIVE_MIN_INTERVAL_MS) return _liveCache;
   _liveLastAttempt = now;
 
-  const live = await readLiveRateLimits();
-  if (live && (live.fiveHour || live.weekly)) {
-    _liveCache = live;
-    _liveCacheAt = now;
-    return live;
-  }
-  return _liveCache; // may be null → caller uses the disk snapshot
+  _liveInflight = (async () => {
+    try {
+      const live = await readLiveRateLimits();
+      if (live && (live.fiveHour || live.weekly)) {
+        _liveCache = live;
+        _liveCacheAt = Date.now();
+        return live;
+      }
+      return _liveCache; // may be null → caller uses the disk snapshot
+    } finally {
+      _liveInflight = null;
+    }
+  })();
+
+  return _liveInflight;
 }
 
 // Take fiveHour / weekly from the newest non-null rate_limits only (newest→
