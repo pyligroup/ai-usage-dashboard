@@ -3,7 +3,7 @@
 // Display rules mirror macos/shared/summary.mjs (keep in sync):
 //   Claude / Codex → binding max(5-hour, weekly) as the big number
 //   Cursor         → plan headline + auto secondary (never "5-hour")
-//   Codex          → "snapshot · age" from capturedAt (never "live")
+//   Codex          → "live (codex cli)" via `codex app-server`, else "snapshot · age"
 //
 // Install: symlink into Übersicht widgets folder (see macos/README.md).
 // Requires `npm start` in ai-usage-dashboard → http://127.0.0.1:4317
@@ -128,7 +128,12 @@ function summarize(key, provider) {
       secondaryText: ok
         ? `5h ${fmtPct(rl.fiveHour?.usedPercent)} · wk ${fmtPct(rl.weekly?.usedPercent)}`
         : '5h — · wk —',
-      caption: ok ? `snapshot · ${fmtAge(rl.capturedAt)}` : 'no data',
+      // Live via `codex app-server`, else the on-disk rollout snapshot.
+      caption: ok
+        ? rl.source === 'live'
+          ? 'live'
+          : `snapshot · ${fmtAge(rl.capturedAt)}`
+        : 'no data',
     };
   }
 

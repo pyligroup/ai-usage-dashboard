@@ -99,6 +99,25 @@ and `macos/` all render the same `/api/usage` payload. A labeling change is only
 half-done if it lands in one of them — the whole point is that the terminal view
 and the browser never disagree about what a number means.
 
+**The server is the terminal UIs' single source of truth.** `GET /api/usage/stream`
+(SSE) pushes one frame to every subscribed pane on ONE server-owned 30s cadence.
+The TUI subscribes instead of polling, and auto-starts a detached server when
+none is listening (`--no-server` opts out). Why it matters:
+
+- Independent 30s timers let two panes started 12s apart land on opposite sides
+  of the 15s aggregate cache and show different numbers. One broadcast makes
+  every pane repaint from identical bytes at the same instant — countdowns
+  included (the frame carries `nextRefreshAt`).
+- It matters more once Codex fetches live: one shared process means one
+  `codex app-server` subprocess per throttle window for all panes, instead of
+  one per pane on unsynchronized timers.
+
+The broadcast timer only runs while a subscriber is connected, so an idle server
+does no provider work. A joining pane gets a cached frame immediately. The stream
+is additive — `/api/usage` is unchanged, so web/SwiftBar/Übersicht are untouched.
+Any new terminal consumer should subscribe to the stream, not poll and not import
+the providers.
+
 **Caching is per-process, so the server is the shared cache.** Both throttle
 layers — `server.js`'s ~15s aggregate cache and the `MIN_ENDPOINT_INTERVAL_MS`
 (180s) live-endpoint throttles inside `src/claude.js` / `src/cursor.js` — are
@@ -139,9 +158,20 @@ version-fragile.** Codex is local-only by design.
   `rate_limits: null` and continue to the next older event/file. When 5h
   returns in a recent payload (`window_minutes` 300), it shows again.
   `capturedAt` is that newest usable snapshot.
-- **This means Codex's % is only as fresh as your last Codex run that persisted a
-  rollout.** It is NOT live. The UI must never label it "live" — it says
-  `snapshot · <age>` (and `· may lag` when the snapshot is older than ~1h).
+- **Live layer (preferred):** `codex app-server` (Codex's own CLI) exposes a
+  documented JSON-RPC method `account/rateLimits/read`. `src/codex.js` spawns it,
+  reads, and the subprocess exits (~500ms), throttled to >=180s. This is NOT the
+  forbidden path: we never call `chatgpt.com/backend-api/wham/usage` ourselves and
+  never refresh the OAuth token (refresh is a separate explicit method,
+  `chatgptAuthTokens/refresh`, that we do not call — verified auth.json stays
+  byte-identical). Reads are account metadata: no session, no turn, **no tokens
+  consumed** (verified `lifetimeTokens` unchanged across repeated reads). Because
+  it is live it DOES reflect `codex exec --ephemeral`. `rateLimits.source` is
+  `'live'`; the chip says `live` like the other providers.
+- **Fallback layer:** when the spawn fails (no `codex` on PATH, protocol drift —
+  `app-server` is `[experimental]`), it degrades to the on-disk rollout below and
+  sets `source: 'snapshot'`. The UI must then say `snapshot · <age>`
+  (and `· may lag` past ~1h), never "live".
   Preserve that. Importantly, `codex exec --ephemeral` (and any other mode that
   skips writing session files) still consumes plan quota on OpenAI’s side but
   leaves **no** local `rate_limits` for this dashboard to read — so ChatGPT’s
@@ -150,9 +180,13 @@ version-fragile.** Codex is local-only by design.
 - Token totals (last 30 days): sum **in-window deltas** of per-session
   `total_token_usage`, not the final cumulative total. Resumed/long-running
   sessions that started before the cutoff would otherwise over-count.
-- **Never call the live `chatgpt.com/backend-api/wham/usage` endpoint from here, and
-  never refresh the Codex OAuth token.** Refreshing independently races Codex's own
-  refresh-token rotation and can revoke the user's login. Read-only, always.
+- **Never call the live `chatgpt.com/backend-api/wham/usage` endpoint from here,
+  and never refresh the Codex OAuth token.** Refreshing independently races
+  Codex's own refresh-token rotation and can revoke the user's login. Read-only,
+  always. This bans *those two things specifically* — not live Codex data as
+  such: going through `codex app-server` (above) is safe precisely because Codex
+  itself owns the request and the token, and the refresh method is separate and
+  never called.
 
 ### Claude (`src/claude.js`) — live endpoint + local token totals
 
@@ -348,10 +382,12 @@ New code must uphold this.
 - Token sections: Claude/Codex = "last 30 days" from local logs; Cursor =
   billing-cycle ("current period") from the dashboard API when
   `billingCycleStart` is known, else "last 30 days". Cursor has no daily sparkline.
-- Provenance chips: Claude/Cursor → `live` / `live (cached)` / `tokens only`;
-  Codex → `snapshot · <age>` (never "live"); append `· may lag` when the
-  snapshot is older than ~1h (ephemeral / non-persisted runs may have moved
-  live usage ahead).
+- Provenance chips: Claude/Cursor → `live` / `live (cached)` / `tokens only`.
+  Codex → `live` when `rateLimits.source === 'live'` (read through `codex
+  app-server`), else `snapshot · <age>`, appending `· may lag` past ~1h
+  (ephemeral / non-persisted runs may have moved live usage ahead). Never label
+  a snapshot "live", and never leave live data labelled "snapshot" — both are
+  the same class of lie.
 
 ## Product principles (why the UI is the way it is)
 

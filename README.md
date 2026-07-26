@@ -27,9 +27,10 @@ cookies on this machine (`ai_usage_tools`, `ai_usage_theme`, `ai_usage_layout`).
     (promo/referral grant balance) when remaining > 0
 - **Compact view** (Settings checkbox): dense bars-only cards — no token
   stats, sparklines, by-model, or accordion. Turn off to restore full detail.
-- **Every value labels its source.** Claude and Cursor % are fetched live; Codex %
-  is read from Codex's last on-disk snapshot and is tagged with its age (it only
-  changes when you actually run Codex).
+- **Every value labels its source.** Claude and Cursor % are fetched live from
+  their APIs; Codex % is read live through Codex's own CLI. If that read is
+  unavailable, Codex falls back to its last on-disk snapshot and is tagged with
+  its age instead of claiming to be live.
 - **Cursor meters a billing-cycle plan**, not a 5-hour / weekly window. The
   headline plan % is Cursor’s **Total Usage** meter (`totalPercentUsed` from
   `usage-summary`) — the same cutoff signal as cursor.com/dashboard Spending.
@@ -56,17 +57,21 @@ never log in again.
 
 | Provider | Live rate-limit / plan % | Token totals |
 |---|---|---|
-| **Codex** | Read from the per-turn snapshot Codex persists to `~/.codex/sessions/**/rollout-*.jsonl` (no network, no auth). | Summed from the same rollout files (last 30 days). |
+| **Codex** | Read live through Codex's own CLI (`codex app-server` → `account/rateLimits/read`), so it includes `codex exec --ephemeral`. No tokens are consumed and no credentials are touched. Falls back to the per-turn snapshot in `~/.codex/sessions/**/rollout-*.jsonl` if that's unavailable. | Summed from the same rollout files (last 30 days). |
 | **Claude** | Fetched from the same endpoint Claude Code's `/usage` meter uses (`api.anthropic.com/api/oauth/usage`), authenticated with the OAuth token Claude Code already stored (macOS Keychain / `~/.claude/.credentials.json`). | Summed from `~/.claude/projects/**/*.jsonl` (last 30 days). |
 | **Cursor** | Fetched from Cursor's dashboard API (`cursor.com/api/usage-summary`), authenticated with the session JWT Cursor already stored in `state.vscdb` (or the `cursor-access-token` keychain entry). Headline % = `totalPercentUsed`. Promo/referral **Credits** from `get-credit-grants-balance` when remaining > 0. | Aggregated via `cursor.com/api/dashboard/get-aggregated-usage-events` for the current billing period (or last 30 days if cycle start is unknown). |
 
-> **Live vs snapshot — an important distinction.** Claude's and Cursor's % are
-> fetched *live* (throttled to once every few minutes). Codex's % is read from the
-> snapshot Codex writes to disk on each run that persists a rollout — so it only
-> updates when a non-ephemeral session writes `rate_limits`. The dashboard shows
-> its age (`snapshot · 2m ago`, or `· may lag` when older than ~1h) rather than
-> claiming it's live. `codex exec --ephemeral` still burns plan quota but leaves
-> no local snapshot, so ChatGPT’s usage page can be ahead of this card.
+> **Live vs snapshot — how Codex is labelled.** Claude's and Cursor's % are
+> fetched *live* from their APIs (throttled to once every few minutes). Codex's %
+> is read live too, but through **Codex's own CLI** (`codex app-server`) rather
+> than by calling an OpenAI endpoint ourselves — so it includes
+> `codex exec --ephemeral` runs that never write a rollout file. That read
+> consumes no tokens and touches no credentials.
+>
+> If it isn't available (no `codex` on PATH, or the interface changes — it is
+> marked experimental), the card falls back to the snapshot Codex wrote to disk
+> and says so: `snapshot · 2m ago`, plus `· may lag` past ~1h. It never claims
+> to be live when it isn't.
 
 The live endpoints are **undocumented** and may change or become temporarily
 unavailable. When that happens the dashboard **degrades gracefully** (the card
@@ -149,18 +154,25 @@ it means you're ahead of pace.
 
 #### Running more than one
 
-Start the server first:
+Just open more panes — they stay in sync automatically:
 
 ```bash
-npm start          # then run as many TUIs as you like
+npm run tui        # first pane starts the shared server if it isn't running
+npm run tui        # every other pane subscribes to it
 ```
 
-Every TUI (and the browser, and the macOS clients) then shares that one
-server's ~15s cache, so the live Claude/Cursor endpoints get called **once for
-everybody**. Without a server each instance polls independently — measured
-here at ~4.2s per refresh versus ~0.07s server-backed, and each one counts
-separately against the providers' rate limits. The footer tells you which mode
-you're in (`shared cache` vs `reading local files directly`).
+One server owns every provider call and pushes the same frame to all connected
+panes on a single cadence, so they show identical numbers and identical
+countdowns rather than drifting on separate timers. It keeps running after a
+pane exits (serving the others); `--no-server` opts out and reads local files
+in that process instead.
+
+The browser and macOS clients share that same server (they poll
+`/api/usage`), so the live Claude/Cursor endpoints get called **once for
+everybody**. A pane running with `--no-server` reads local files in its own
+process instead — measured at ~4.2s per refresh versus ~0.07s server-backed,
+and it counts separately against the providers' rate limits. The footer always
+says which mode you're in.
 
 ### Install as a standalone window (Chrome)
 
@@ -195,8 +207,8 @@ for install/symlink steps.
 - **Übersicht** — desktop widget (HTML/CSS/JS)
 - **SwiftBar** — menu-bar item **`AI`** (click for Claude / Codex / Cursor detail)
 
-They do not re-read credentials or provider files; Codex still shows as a
-snapshot with age, never “live”.
+They do not re-read credentials or provider files — they render whatever
+`/api/usage` reports, including Codex's live-or-snapshot label.
 
 ### Options (env vars)
 
@@ -217,7 +229,9 @@ Everything runs locally. Outbound network calls are only:
 - Cursor's usage/dashboard endpoints (`cursor.com`), using your existing Cursor session
 
 No data leaves your machine otherwise, and no credentials are logged or written
-anywhere. Codex stays fully offline.
+anywhere. For Codex the dashboard never calls an OpenAI endpoint itself and never
+touches the OAuth token: it asks Codex's own CLI for the numbers, and falls back
+to reading local files.
 
 ## Notes / caveats
 

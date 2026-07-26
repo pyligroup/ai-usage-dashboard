@@ -482,12 +482,18 @@ function limitsPanel(key, p, ctx) {
     return out;
   }
 
+  // Codex now has two possible sources: a live read via `codex app-server`
+  // (source: 'live') or the on-disk rollout snapshot (source: 'snapshot').
+  // Say which one produced the number — "saved 2m ago" on live data would be
+  // the same class of lie as the old "live" chip on snapshot data.
   const src = hasLimits
     ? isClaude
       ? rl.stale
         ? 'live (cached)'
         : 'live'
-      : `saved ${fmtAge(rl.capturedAt, now)}`
+      : rl.source === 'live'
+        ? 'live'
+        : `saved ${fmtAge(rl.capturedAt, now)}`
     : null;
 
   // Codex: omit windows absent from the newest snapshot (weekly-only is normal
@@ -543,16 +549,26 @@ function limitsPanel(key, p, ctx) {
           : 'Live rate-limit % unavailable — showing local token totals.';
     out.push(...note(why, width), '');
   } else if (isCodex && !compact) {
-    const staleHint = isCodexSnapshotStale(rl.capturedAt, now)
-      ? ' This snapshot looks old — chatgpt.com/codex/settings/usage may already be higher if you ran `codex exec --ephemeral` (or other non-persisted sessions) since then.'
-      : '';
-    out.push(
-      ...note(
-        `From Codex's last on-disk rollout under ~/.codex/sessions. Updates only when a session writes rate_limits — not for \`codex exec --ephemeral\`.${staleHint}`,
-        width,
-      ),
-      '',
-    );
+    if (rl.source === 'live') {
+      out.push(
+        ...note(
+          "Read live from Codex's own CLI (`codex app-server`, account/rateLimits/read) — so it includes `codex exec --ephemeral` and other runs that never write a rollout file. No tokens are consumed and no credentials are touched.",
+          width,
+        ),
+        '',
+      );
+    } else {
+      const staleHint = isCodexSnapshotStale(rl.capturedAt, now)
+        ? ' This snapshot looks old — chatgpt.com/codex/settings/usage may already be higher if you ran `codex exec --ephemeral` (or other non-persisted sessions) since then.'
+        : '';
+      out.push(
+        ...note(
+          `From Codex's last on-disk rollout under ~/.codex/sessions (live read unavailable). Updates only when a session writes rate_limits — not for \`codex exec --ephemeral\`.${staleHint}`,
+          width,
+        ),
+        '',
+      );
+    }
   }
 
   return out;
@@ -734,13 +750,20 @@ function providerCard(key, p, ctx) {
   const out = [];
 
   // Provenance chip — same honesty rules as the web header:
-  //   Claude/Cursor -> live | live (cached);  Codex -> snapshot · age (never "live")
+  //   Claude/Cursor -> live | live (cached)
+  //   Codex         -> "live (codex cli)" when read via `codex app-server`,
+  //                    else "snapshot · age" from the on-disk rollout. Naming the
+  //                    mechanism matters: this number comes from Codex's own CLI,
+  //                    not from us calling an OpenAI endpoint.
   let chip;
   let chipColor = C.faint;
   if (!hasLimits) {
     chip = 'tokens only';
   } else if (isClaude || isCursor) {
     chip = rl.stale ? 'live (cached)' : 'live';
+    chipColor = C.ok;
+  } else if (rl.source === 'live') {
+    chip = 'live';
     chipColor = C.ok;
   } else {
     const stale = isCodexSnapshotStale(rl.capturedAt, now);
