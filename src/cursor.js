@@ -18,8 +18,15 @@
 //        macOS:   ~/Library/Application Support/Cursor/User/globalStorage/state.vscdb
 //        Linux:   ~/.config/Cursor/User/globalStorage/state.vscdb
 //        Windows: %APPDATA%/Cursor/User/globalStorage/state.vscdb
-//   3. macOS Keychain service "cursor-access-token" (cursor-agent CLI) — often
-//      staler than the IDE DB; tried last.
+//   3. cursor-agent CLI auth file → accessToken (refreshToken ignored, never used)
+//        macOS/Linux: $XDG_CONFIG_HOME/cursor/auth.json (default ~/.config/cursor/auth.json)
+//        Windows:     %APPDATA%/cursor/auth.json
+//      Note the lowercase "cursor" — distinct from the IDE's "Cursor" dir above.
+//      This is the ONLY source on a machine with the CLI but no desktop IDE;
+//      source 2 requires the IDE and source 4 is darwin-only, so without this a
+//      CLI-only Linux/Windows box reports no-credential despite being signed in.
+//   4. macOS Keychain service "cursor-access-token" (cursor-agent CLI) — often
+//      staler than the CLI auth file / IDE DB; tried last.
 //
 // Cookie format required by cursor.com: WorkosCursorSessionToken=<sub>::<jwt>
 // where <sub> may be the full JWT `sub` claim or the trailing `user_…` segment.
@@ -148,6 +155,40 @@ async function readKeyFromStateDb(key) {
   return null;
 }
 
+// cursor-agent CLI credential file. Unlike the IDE state DB this exists on
+// machines that never installed the Cursor desktop app — which is the only
+// reason a CLI-only Linux box has any credential at all (the Keychain source
+// below is darwin-gated). Also present on macOS, where it tends to be fresher
+// than the Keychain copy, so it is tried first.
+//
+// Shape: { "accessToken": "<jwt>", "refreshToken": "<jwt>" }. We read
+// accessToken ONLY — refreshToken is deliberately ignored. Refreshing races
+// Cursor's own token rotation and can revoke the user's login (same rule as
+// Codex OAuth). Read-only, never written.
+function cliAuthPath() {
+  if (process.env.CURSOR_CLI_AUTH) return process.env.CURSOR_CLI_AUTH;
+  const home = os.homedir();
+  if (process.platform === 'win32') {
+    const appData = process.env.APPDATA || path.join(home, 'AppData', 'Roaming');
+    return path.join(appData, 'cursor', 'auth.json');
+  }
+  // macOS + Linux: the CLI uses an XDG-style path on both.
+  const xdg = process.env.XDG_CONFIG_HOME || path.join(home, '.config');
+  return path.join(xdg, 'cursor', 'auth.json');
+}
+
+async function readCliAccessToken() {
+  try {
+    const raw = await fs.readFile(cliAuthPath(), 'utf8');
+    const parsed = JSON.parse(raw);
+    const t = typeof parsed?.accessToken === 'string' ? parsed.accessToken.trim() : '';
+    return t || null;
+  } catch {
+    // missing file / bad JSON / no permission — just fall through to the next source
+    return null;
+  }
+}
+
 async function readKeychainAccessToken() {
   if (process.platform !== 'darwin') return null;
   try {
@@ -174,6 +215,9 @@ export async function getCursorCredential() {
 
   if (!accessToken) {
     accessToken = await readKeyFromStateDb('cursorAuth/accessToken');
+  }
+  if (!accessToken) {
+    accessToken = await readCliAccessToken();
   }
   if (!accessToken) {
     accessToken = await readKeychainAccessToken();

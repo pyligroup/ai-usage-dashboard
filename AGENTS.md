@@ -268,9 +268,19 @@ as plan / billing-cycle — **never** as "5-hour" or "weekly".
      - macOS: `~/Library/Application Support/Cursor/User/globalStorage/state.vscdb`
      - Linux: `~/.config/Cursor/User/globalStorage/state.vscdb`
      - Windows: `%APPDATA%/Cursor/User/globalStorage/state.vscdb`
-  3. macOS Keychain service `cursor-access-token` (often staler than the IDE DB)
+  3. `cursor-agent` CLI auth file → `accessToken` (**`refreshToken` ignored**)
+     - macOS / Linux: `$XDG_CONFIG_HOME/cursor/auth.json` (default `~/.config/cursor/auth.json`)
+     - Windows: `%APPDATA%/cursor/auth.json`
+     - Note the lowercase `cursor` — a different directory from the IDE's `Cursor`.
+     - This is the **only** source on a machine with the CLI but no desktop IDE:
+       source 2 needs the IDE and source 4 is darwin-only, so without it a
+       CLI-only Linux/Windows box reports `no-credential` while signed in.
+  4. macOS Keychain service `cursor-access-token` (often staler than the CLI
+     auth file / IDE DB)
 - Membership metadata (`stripeMembershipType`, email, …) is also read from the
   same state DB. SQLite is queried via system `sqlite3` / `python3` (no npm deps).
+  It is absent on CLI-only machines; the live endpoint supplies `membershipType`
+  in that case, so the card still renders.
 - **Never refresh Cursor tokens.** Send the JWT only to `cursor.com` (and never
   log it).
 
